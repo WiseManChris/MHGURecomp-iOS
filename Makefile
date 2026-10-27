@@ -101,7 +101,7 @@ FRAMEWORKS := -framework UIKit -framework Metal -framework QuartzCore -framework
               -framework IOSurface -framework CoreVideo -framework CoreMedia \
               -framework AVFoundation -framework CoreBluetooth -framework CoreMotion \
               -framework OpenGLES
-LDFLAGS  := $(ARCH_FLAGS) -L$(DEPS)/lib -lSDL3 -lMoltenVK -lshaderc_combined $(FRAMEWORKS) -lc++ -Wl,-U,_OBJC_CLASS_$_MTLResidencySetDescriptor
+LDFLAGS  := $(ARCH_FLAGS) -L$(DEPS)/lib -lSDL3 -lMoltenVK -lshaderc_combined $(FRAMEWORKS) -lc++
 GAMELIB  := $(B)/mhgugame.dylib
 GAMELIB_LDFLAGS := -shared $(ARCH_FLAGS)
 else

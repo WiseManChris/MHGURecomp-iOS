@@ -15,6 +15,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+
       - name: Cache prebuilt iOS dependencies
         id: cache-deps
         uses: actions/cache@v4
