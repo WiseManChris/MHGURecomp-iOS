@@ -76,7 +76,9 @@ Service *service_lookup(const char *name);
 void ipc_return_object(IpcResp *resp, Service *s);
 
 typedef struct { const char *name; ServiceHandler handler; } ServiceDef;
-#if defined(__linux__)
+#if defined(__APPLE__)
+#define SERVICE_SECTION "__DATA,__services"
+#elif defined(__linux__)
 #define SERVICE_SECTION "services"
 #else
 #define SERVICE_SECTION ".svc$m"  // between the .svc$a / .svc$z markers in runtime/ipc.c

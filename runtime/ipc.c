@@ -5,7 +5,12 @@
 #include "hle.h"
 #include "ipc.h"
 
-#if defined(__linux__)
+#if defined(__APPLE__)
+extern const ServiceDef section$start$__DATA$__services[] __asm("section$start$__DATA$__services");
+extern const ServiceDef section$end$__DATA$__services[] __asm("section$end$__DATA$__services");
+#define __start_services section$start$__DATA$__services
+#define __stop_services section$end$__DATA$__services
+#elif defined(__linux__)
 extern const ServiceDef __start_services[], __stop_services[];
 #else
 // PE/COFF: .svc$a < .svc$m (entries, ipc.h) < .svc$z (the linker sorts by the text after '$')

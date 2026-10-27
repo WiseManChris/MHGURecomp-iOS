@@ -26,7 +26,12 @@ static struct { uint32_t addr; HostFn fn; const char *name; } overrides[MAX_OVER
 static int override_count;
 
 // Host implementations registered by name (HLE_FUNC)
-#if defined(__linux__)
+#if defined(__APPLE__)
+extern const HleImplEntry section$start$__DATA$__hle_impls[] __asm("section$start$__DATA$__hle_impls");
+extern const HleImplEntry section$end$__DATA$__hle_impls[] __asm("section$end$__DATA$__hle_impls");
+#define __start_hle_impls section$start$__DATA$__hle_impls
+#define __stop_hle_impls section$end$__DATA$__hle_impls
+#elif defined(__linux__)
 extern const HleImplEntry __start_hle_impls[], __stop_hle_impls[];
 #else
 // PE/COFF: the linker sorts .hle$a < .hle$m (entries, hle.h) < .hle$z by the text after '$'.

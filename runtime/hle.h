@@ -12,7 +12,9 @@ typedef struct { const char *name; HostFn fn; } HleImplEntry;
 // a host function.
 #define HLE_CAT2(a, b) a##b
 #define HLE_CAT(a, b) HLE_CAT2(a, b)
-#if defined(__linux__)
+#if defined(__APPLE__)
+#define HLE_SECTION "__DATA,__hle_impls"
+#elif defined(__linux__)
 #define HLE_SECTION "hle_impls"
 #else
 #define HLE_SECTION ".hle$m"  // between the .hle$a / .hle$z markers in runtime/dispatch.c
