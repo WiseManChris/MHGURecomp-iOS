@@ -8,7 +8,13 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifndef GUEST_BASE
+#if defined(__APPLE__)
+#define GUEST_BASE 0x400000000ull  // 16 GB: fits in unprivileged 36-bit iOS virtual address space (no special entitlements needed)
+#else
 #define GUEST_BASE 0x10000000000ull  // 1 TB: claimed at startup (runtime/main.c)
+#endif
+#endif
 
 typedef struct __attribute__((aligned(16))) Cpu {
     uint32_t r[16];          // 0: r0-r14 (r13 sp, r14 lr); r[15] unused (pc reads are constants)

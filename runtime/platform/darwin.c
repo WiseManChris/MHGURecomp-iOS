@@ -60,13 +60,23 @@ static bool lazy_commit(uint64_t a) {
 static void fault_handler(int sig, siginfo_t *si, void *uc);
 
 bool plat_reserve_guest(uint64_t base, uint64_t size) {
+    fprintf(stderr, "[plat] plat_reserve_guest: requesting base=0x%llx, size=0x%llx (4 GB)...\n",
+            (unsigned long long)base, (unsigned long long)size);
     void *p = mmap((void *)(uintptr_t)base, size, PROT_NONE,
                    MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
     if (p != (void *)(uintptr_t)base) {
-        fprintf(stderr, "[plat] failed to reserve 0x%llx (size 0x%llx): mmap=%p (errno %d)\n",
-                (unsigned long long)base, (unsigned long long)size, p, errno);
+        fprintf(stderr, "[plat] FATAL: failed to reserve 0x%llx (size 0x%llx): mmap=%p (errno %d: %s)\n",
+                (unsigned long long)base, (unsigned long long)size, p, errno, strerror(errno));
+        FILE *ef = fopen("STARTUP_ERROR.txt", "w");
+        if (ef) {
+            fprintf(ef, "MHGURecomp Fatal Startup Error:\n");
+            fprintf(ef, "Failed to reserve 4 GB virtual guest memory at 0x%llx.\n", (unsigned long long)base);
+            fprintf(ef, "mmap error code %d: %s\n", errno, strerror(errno));
+            fclose(ef);
+        }
         return false;
     }
+    fprintf(stderr, "[plat] Successfully reserved 4 GB guest memory at %p!\n", p);
 
     g_lo = base;
     g_hi = base + size;
@@ -163,9 +173,14 @@ static bool mkdir_p(const char *path) {
     return mkdir(buf, 0777) == 0 || errno == EEXIST;
 }
 
+static bool s_standalone_done = false;
+
 void plat_standalone(void) {
+    if (s_standalone_done) return;
+    s_standalone_done = true;
+
     const char *home = getenv("HOME");
-    char doc_dir[PATH_MAX];
+    char doc_dir[PATH_MAX] = "";
     if (home && *home) {
         snprintf(doc_dir, sizeof doc_dir, "%s/Documents", home);
         mkdir_p(doc_dir);
@@ -177,12 +192,34 @@ void plat_standalone(void) {
             if (s) { *s = 0; if (chdir(exe) != 0) {} }
         }
     }
+
+    mkdir_p("data/exefs");
+    mkdir_p("data/romfs");
+    FILE *rf = fopen("data/README.txt", "w");
+    if (rf) {
+        fprintf(rf, "Monster Hunter Generations Ultimate (Switch v1.4.0)\n\n"
+                    "Place your extracted game files here:\n"
+                    "  data/exefs/main\n"
+                    "  data/exefs/sdk\n"
+                    "  data/exefs/main.npdm\n"
+                    "  data/romfs/... (extracted romfs files)\n");
+        fclose(rf);
+    }
+
     if (freopen("log.txt", "w", stderr)) {
         setvbuf(stderr, NULL, _IONBF, 0);
         dup2(fileno(stderr), STDOUT_FILENO);
         g_own_log = true;
     }
+    fprintf(stderr, "[plat] Darwin early init complete. Working dir: %s\n", doc_dir[0] ? doc_dir : ".");
 }
+
+#if defined(__APPLE__)
+// Run at dynamic load time before constructor(101) reserve_guest_space
+__attribute__((constructor(100))) static void darwin_early_ctor(void) {
+    plat_standalone();
+}
+#endif
 
 bool plat_user_dir(char *buf, size_t size) {
     const char *home = getenv("HOME");
