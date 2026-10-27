@@ -268,6 +268,8 @@ void plat_setup_ios_documents(void) {
 @property (nonatomic, copy) NSString *docPath;
 @property (nonatomic, assign) BOOL filesFound;
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UIScrollView *scrollView;
+@property (nonatomic, strong) UIView *container;
 @end
 
 @implementation MHGUMissingFilesVC
@@ -284,40 +286,39 @@ void plat_setup_ios_documents(void) {
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor colorWithRed:0.07 green:0.09 blue:0.13 alpha:1.0];
 
-    UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:self.view.bounds];
-    scrollView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [self.view addSubview:scrollView];
+    self.scrollView = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    self.scrollView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:self.scrollView];
 
-    CGFloat width = self.view.bounds.size.width;
-    if (width < 600) width = 800;
-    UIView *container = [[UIView alloc] initWithFrame:CGRectMake(40, 24, width - 80, 540)];
-    container.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [scrollView addSubview:container];
+    CGFloat width = self.view.bounds.size.width > 100 ? self.view.bounds.size.width : 1024;
+    self.container = [[UIView alloc] initWithFrame:CGRectMake(30, 20, width - 60, 540)];
+    self.container.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [self.scrollView addSubview:self.container];
 
     // 1. App Title
-    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, container.bounds.size.width, 36)];
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, self.container.bounds.size.width, 36)];
     titleLabel.text = @"Monster Hunter Generations Ultimate";
     titleLabel.font = [UIFont boldSystemFontOfSize:26];
     titleLabel.textColor = [UIColor whiteColor];
     titleLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [container addSubview:titleLabel];
+    [self.container addSubview:titleLabel];
 
     // Subtitle
-    UILabel *subLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 38, container.bounds.size.width, 24)];
+    UILabel *subLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 38, self.container.bounds.size.width, 24)];
     subLabel.text = @"Native ARM64 iOS / iPadOS Port (Switch v1.4.0)";
     subLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
     subLabel.textColor = [UIColor colorWithRed:0.6 green:0.65 blue:0.75 alpha:1.0];
     subLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [container addSubview:subLabel];
+    [self.container addSubview:subLabel];
 
     // 2. Alert Badge Box
-    UIView *badgeBox = [[UIView alloc] initWithFrame:CGRectMake(0, 72, container.bounds.size.width, 48)];
+    UIView *badgeBox = [[UIView alloc] initWithFrame:CGRectMake(0, 72, self.container.bounds.size.width, 48)];
     badgeBox.backgroundColor = [UIColor colorWithRed:0.25 green:0.18 blue:0.05 alpha:1.0];
     badgeBox.layer.cornerRadius = 8;
     badgeBox.layer.borderWidth = 1;
     badgeBox.layer.borderColor = [UIColor colorWithRed:0.85 green:0.65 blue:0.15 alpha:1.0].CGColor;
     badgeBox.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [container addSubview:badgeBox];
+    [self.container addSubview:badgeBox];
 
     UILabel *badgeText = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, badgeBox.bounds.size.width - 32, 48)];
     badgeText.text = @"⚠️  Action Required: Game dump files not found";
@@ -327,13 +328,13 @@ void plat_setup_ios_documents(void) {
     [badgeBox addSubview:badgeText];
 
     // 3. Instruction Card
-    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 130, container.bounds.size.width, 240)];
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 130, self.container.bounds.size.width, 240)];
     card.backgroundColor = [UIColor colorWithRed:0.11 green:0.14 blue:0.20 alpha:1.0];
     card.layer.cornerRadius = 10;
     card.layer.borderWidth = 1;
     card.layer.borderColor = [UIColor colorWithRed:0.2 green:0.25 blue:0.35 alpha:1.0].CGColor;
     card.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [container addSubview:card];
+    [self.container addSubview:card];
 
     UILabel *cardTitle = [[UILabel alloc] initWithFrame:CGRectMake(20, 14, card.bounds.size.width - 40, 24)];
     cardTitle.text = @"The MHGU Recomp folder is ready in your Files app:";
@@ -369,7 +370,7 @@ void plat_setup_ios_documents(void) {
     checkBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
     checkBtn.layer.cornerRadius = 8;
     [checkBtn addTarget:self action:@selector(onCheckFiles:) forControlEvents:UIControlEventTouchUpInside];
-    [container addSubview:checkBtn];
+    [self.container addSubview:checkBtn];
 
     UIButton *exitBtn = [UIButton buttonWithType:UIButtonTypeSystem];
     exitBtn.frame = CGRectMake(250, 385, 100, 48);
@@ -379,17 +380,28 @@ void plat_setup_ios_documents(void) {
     exitBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
     exitBtn.layer.cornerRadius = 8;
     [exitBtn addTarget:self action:@selector(onExitApp:) forControlEvents:UIControlEventTouchUpInside];
-    [container addSubview:exitBtn];
+    [self.container addSubview:exitBtn];
 
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(365, 385, container.bounds.size.width - 365, 48)];
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(365, 385, self.container.bounds.size.width - 365, 48)];
     self.statusLabel.font = [UIFont systemFontOfSize:14];
     self.statusLabel.textColor = [UIColor colorWithRed:0.7 green:0.75 blue:0.85 alpha:1.0];
     self.statusLabel.numberOfLines = 2;
     self.statusLabel.text = @"Waiting for game files... (auto-checks every 2 seconds)";
     self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [container addSubview:self.statusLabel];
+    [self.container addSubview:self.statusLabel];
 
-    scrollView.contentSize = CGSizeMake(self.view.bounds.size.width, 500);
+    self.scrollView.contentSize = CGSizeMake(self.view.bounds.size.width, 560);
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    self.scrollView.frame = self.view.bounds;
+    CGFloat pad = 30.0f;
+    CGFloat cWidth = self.view.bounds.size.width - (pad * 2.0f);
+    if (cWidth > 100) {
+        self.container.frame = CGRectMake(pad, 20.0f, cWidth, 540.0f);
+    }
+    self.scrollView.contentSize = CGSizeMake(self.view.bounds.size.width, 560.0f);
 }
 
 - (void)onCheckFiles:(id)sender {
@@ -429,10 +441,11 @@ void plat_show_missing_files_screen(const char *main_path, const char *doc_path)
         vc.mainPath = [NSString stringWithUTF8String:main_path];
         vc.docPath = doc_path ? [NSString stringWithUTF8String:doc_path] : nil;
 
+        UIViewController *origRoot = nil;
         UIWindow *standaloneWindow = nil;
         if (targetWindow) {
-            vc.view.frame = targetWindow.bounds;
-            [targetWindow addSubview:vc.view];
+            origRoot = targetWindow.rootViewController;
+            targetWindow.rootViewController = vc;
         } else {
             UIWindowScene *activeScene = nil;
             if (@available(iOS 13.0, *)) {
@@ -469,8 +482,8 @@ void plat_show_missing_files_screen(const char *main_path, const char *doc_path)
             }
         }
 
-        if (targetWindow) {
-            [vc.view removeFromSuperview];
+        if (targetWindow && origRoot) {
+            targetWindow.rootViewController = origRoot;
         }
         if (standaloneWindow) {
             standaloneWindow.hidden = YES;

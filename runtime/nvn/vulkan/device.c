@@ -63,6 +63,11 @@ static void disable_overwolf_layers(void) {
         if (!getenv(vars[i])) SDL_setenv_unsafe(vars[i], "1", 0);
 }
 
+static bool has_ext(VkExtensionProperties *e, uint32_t n, const char *name) {
+    for (uint32_t i = 0; i < n; i++) if (!strcmp(e[i].extensionName, name)) return true;
+    return false;
+}
+
 static void create_instance(void) {
     disable_overwolf_layers();
     Uint32 n_sdl = 0;
@@ -74,7 +79,13 @@ static void create_instance(void) {
     bool validate = getenv("MHGU_VK_VALIDATION") != NULL;
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 #ifdef __APPLE__
-    ext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+    uint32_t n_avail = 0;
+    vkEnumerateInstanceExtensionProperties(NULL, &n_avail, NULL);
+    VkExtensionProperties *avail = calloc(n_avail, sizeof *avail);
+    vkEnumerateInstanceExtensionProperties(NULL, &n_avail, avail);
+    bool has_portability_enum = has_ext(avail, n_avail, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    free(avail);
+    if (has_portability_enum) ext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
 #endif
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
     VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO, .pApplicationName = "MHGURecomp",
@@ -83,7 +94,7 @@ static void create_instance(void) {
                                .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext,
                                .enabledLayerCount = validate ? 1 : 0, .ppEnabledLayerNames = layers};
 #ifdef __APPLE__
-    ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    if (has_portability_enum) ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
     VkResult r = vkCreateInstance(&ci, NULL, &g_vk.inst);
     if (r != VK_SUCCESS && validate) {
@@ -104,11 +115,6 @@ static void create_instance(void) {
             .pfnUserCallback = debug_cb};
         if (f) f(g_vk.inst, &mi, NULL, &messenger);
     }
-}
-
-static bool has_ext(VkExtensionProperties *e, uint32_t n, const char *name) {
-    for (uint32_t i = 0; i < n; i++) if (!strcmp(e[i].extensionName, name)) return true;
-    return false;
 }
 
 // Discrete GPU first (MHGU_GPU=<index> picks one); needs Vulkan 1.2 and a queue that can draw, compute and present.

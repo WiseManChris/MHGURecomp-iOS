@@ -69,8 +69,13 @@ void ui_init(void) {
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, g_config.background_input ? "1" : "0");
     if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) FATAL("SDL_InitSubSystem: %s\n", SDL_GetError());
     win_w = g_config.width, win_h = g_config.height;
+#ifndef __APPLE__
     fit_desktop(&win_w, &win_h);
+#endif
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#ifdef __APPLE__
+    flags |= SDL_WINDOW_FULLSCREEN;
+#endif
 #ifndef MHGU_NULL_BACKEND
     flags |= SDL_WINDOW_VULKAN;
 #endif
