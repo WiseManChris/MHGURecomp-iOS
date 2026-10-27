@@ -19,6 +19,8 @@ __pycache__/
 *.rar
 *.zip
 *.7z
+*.ipa
+/MHGURecomp-iOS-ipa/
 /run2/
 /run3/
 /third_party/ffmpeg/
