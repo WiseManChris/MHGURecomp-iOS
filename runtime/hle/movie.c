@@ -1,3 +1,64 @@
+#ifdef MHGU_NO_FFMPEG
+#include <stdlib.h>
+#include <string.h>
+#include "../hle.h"
+
+HLE_FUNC("_ZN5movie9MediaDataC1Ev", md_ctor) { ST32(ARG(0), 0); }
+HLE_FUNC("_ZN5movie9MediaDataD1Ev", md_dtor) { ST32(ARG(0), 0); }
+HLE_FUNC("_ZN5movie9MediaData5ClearEv", md_clear_hle) { (void)c; }
+HLE_FUNC("_ZNK5movie9MediaData9FindInt32EPKcPi", md_find_int32) { RET(0); }
+HLE_FUNC("_ZNK5movie9MediaData9FindInt64EPKcPx", md_find_int64) { RET(0); }
+HLE_FUNC("_ZNK5movie9MediaData10FindStringEPKcPS2_", md_find_string) { RET(0); }
+HLE_FUNC("_ZNK5movie9MediaData8FindRectEPKcPiS3_S3_S3_", md_find_rect) { RET(0); }
+
+#define BUF_OFFSET 0x00
+#define BUF_SIZE 0x04
+#define BUF_OWNS 0x10
+#define BUF_CAPACITY 0x14
+#define BUF_DATA 0x20
+#define BUF_BYTES 0x24
+
+HLE_FUNC("_ZN5movie6BufferC1Ev", buf_ctor) { memset(ARGP(0), 0, BUF_BYTES); }
+HLE_FUNC("_ZN5movie6BufferD1Ev", buf_dtor) { (void)c; }
+HLE_FUNC("_ZNK5movie6Buffer4SizeEv", buf_size) { RET(LD32(ARG(0) + BUF_SIZE)); }
+HLE_FUNC("_ZNK5movie6Buffer6OffsetEv", buf_offset) { RET(LD32(ARG(0) + BUF_OFFSET)); }
+HLE_FUNC("_ZN5movie6Buffer8SetRangeEii", buf_set_range) { ST32(ARG(0) + BUF_OFFSET, ARG(1)); ST32(ARG(0) + BUF_SIZE, ARG(2)); }
+HLE_FUNC("_ZN5movie6Buffer18SetDataAndCapacityEPvj", buf_set_data) {
+    ST32(ARG(0) + BUF_DATA, ARG(1));
+    ST32(ARG(0) + BUF_CAPACITY, ARG(2));
+    *(uint8_t *)G2H(ARG(0) + BUF_OWNS) = 0;
+}
+
+HLE_FUNC("_ZN5movie12SetAllocatorEPFPvjjS0_EPFvS0_S0_EPFS0_S0_jS0_ES0_", movie_set_allocator) { RET(0); }
+HLE_FUNC("_ZN5movie11SetCoreMaskEy", movie_set_core_mask) { RET(0); }
+
+static void stub_err(Cpu *c) { RET(0x1000u); }
+static void stub_zero(Cpu *c) { RET(0); }
+
+HLE_FUNC("_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE", movie_extractor_ctor) {
+    static uint32_t vt;
+    if (!vt) {
+        HostFn f[16];
+        for (int i = 0; i < 16; i++) f[i] = stub_err;
+        f[0] = stub_zero; f[1] = stub_zero;
+        vt = make_vtable(f, 16, 0);
+    }
+    ST32(ARG(0), vt);
+    ST32(ARG(0) + 4, 0);
+}
+
+HLE_FUNC("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeE", movie_decoder_ctor) {
+    static uint32_t vt;
+    if (!vt) {
+        HostFn f[19];
+        for (int i = 0; i < 19; i++) f[i] = stub_err;
+        f[0] = stub_zero; f[1] = stub_zero;
+        vt = make_vtable(f, 19, 1);
+    }
+    ST32(ARG(0), vt);
+    ST32(ARG(0) + 4, 0);
+}
+#else
 // movie:: (the Switch's media library, subsdk0, an Android MediaExtractor / MediaCodec-style API) implemented with
 // FFmpeg. The game drives demuxing and decoding itself (its movie player thread) and draws the decoded NV12 frames
 // with its own shaders; we only supply packets and decoded frames. Ported from LAS Recomp's runtime/hle/movie.c
@@ -796,3 +857,4 @@ HLE_FUNC("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11Dec
     ST32(ARG(0) + 4, handle_new(d));
     LOG("[movie] Decoder(type %u, output format %u, mode %u)\n", ARG(1), ARG(2), ARG(3));
 }
+#endif

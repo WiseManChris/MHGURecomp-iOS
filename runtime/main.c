@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <SDL3/SDL_main.h>
 
 #include "gamelib.h"
 #include "hle.h"

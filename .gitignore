@@ -1,5 +1,4 @@
-# Nothing from the game may be committed: no game files, no generated code, no extracted data.
-/generated/
+# Nothing from the game may be committed to public repos:
 /build/
 /obj/
 /build-linux/

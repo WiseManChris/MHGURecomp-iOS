@@ -8,6 +8,8 @@
 UNAME := $(shell uname -s)
 ifneq ($(filter MINGW% MSYS% CYGWIN% Windows_NT,$(UNAME) $(OS)),)
 PLATFORM := windows
+else ifeq ($(UNAME),Darwin)
+PLATFORM := darwin
 else
 PLATFORM := linux
 endif
@@ -68,6 +70,26 @@ LDFLAGS  := -fuse-ld=lld -Wl,--stack,16777216 -lSDL3 $(AV_LIBS) -lvulkan-1 -lsha
             -Wl,--export-all-symbols -Wl,--out-implib,$(O)/mhgurecomp.dll.a
 GAMELIB  := $(B)/mhgugame.dll
 GAMELIB_LDFLAGS := -shared -fuse-ld=lld -static-libgcc $(O)/mhgurecomp.dll.a
+else ifeq ($(PLATFORM),darwin)
+DEPS     ?= deps
+SDKROOT  ?= $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
+ARCH_FLAGS ?= -target arm64-apple-ios14.0 -isysroot $(SDKROOT)
+CC       := xcrun --sdk iphoneos clang $(ARCH_FLAGS)
+CXX      := xcrun --sdk iphoneos clang++ $(ARCH_FLAGS)
+GENARCH  ?=
+GENFLAGS += -fPIC
+OSFLAGS  := -DMHGU_NO_FFMPEG -I$(DEPS)/include
+FFMPEG   := none
+AV_DEPS  :=
+AV_LIBS  :=
+EXE      := $(B)/MHGURecomp
+STATIC_GAMELIB ?= 1
+FRAMEWORKS := -framework UIKit -framework Metal -framework QuartzCore -framework Foundation \
+              -framework CoreGraphics -framework AudioToolbox -framework CoreAudio \
+              -framework GameController -framework CoreHaptics -framework IOKit
+LDFLAGS  := $(ARCH_FLAGS) -L$(DEPS)/lib -lSDL3 -lMoltenVK -lshaderc_combined $(FRAMEWORKS) -lc++
+GAMELIB  := $(B)/mhgugame.dylib
+GAMELIB_LDFLAGS := -shared $(ARCH_FLAGS)
 else
 EXE      := $(B)/mhgurecomp
 OSFLAGS  :=
@@ -81,7 +103,7 @@ endif
 # GAMELIB_ID: what the game code library is compiled against. A library with another id is refused at startup.
 GAMELIB_SRCS := tools/gen.py tools/lifter.py tools/neon.py tools/nso.py tools/gamelib_entry.c \
                 runtime/hle/hle_symbols.txt runtime/cpu.h runtime/vfp.h runtime/neon_rt.h runtime/gamelib.h
-GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | sha256sum | cut -c1-16)
+GAMELIB_ID := $(shell (cat $(GAMELIB_SRCS); echo '$(GENFLAGS)') | (sha256sum 2>/dev/null || shasum -a 256) | cut -c1-16)
 
 RT_OBJ   = $(patsubst runtime/%.c,$(O)/rt/%.o,$(RT_SRC)) $(RT_CXX) $(O)/rt/overlay.o $(IMGUI_OBJ)
 # Dear ImGui with cimgui's C API (third_party/cimgui: Forge plugins' ImGui, runtime/forge_imgui.c, overlay.cpp)
@@ -89,10 +111,10 @@ IMGUI    := third_party/cimgui
 IMGUI_SRC := $(IMGUI)/cimgui.cpp $(addprefix $(IMGUI)/imgui/,imgui.cpp imgui_draw.cpp imgui_tables.cpp imgui_widgets.cpp imgui_demo.cpp)
 IMGUI_SRC += $(if $(filter 1,$(NULL_GPU)),,$(IMGUI)/imgui/backends/imgui_impl_vulkan.cpp)
 IMGUI_OBJ := $(patsubst $(IMGUI)/%.cpp,$(O)/imgui/%.o,$(IMGUI_SRC))
-IMGUIFLAGS := -O2 -g -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui
+IMGUIFLAGS := -O2 -g -std=c++17 -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui $(if $(DEPS),-I$(DEPS)/include)
 # (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
 # with the system vulkan-memory-allocator package are unaffected)
-RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(OSFLAGS)
+RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(if $(DEPS),-I$(DEPS)/include) $(OSFLAGS)
 # NULL_GPU=1: no renderer (runtime/nvn/backend_null.c: the game runs, nothing is drawn)
 ifeq ($(NULL_GPU),1)
 RTFLAGS  += -DMHGU_NULL_BACKEND
@@ -102,7 +124,7 @@ else
 RT_CXX   := $(O)/rt/nvn/vulkan/vma.o
 endif
 
-all: $(EXE) $(if $(GEN_SRC),$(GAMELIB)) $(if $(filter windows,$(PLATFORM)),bundle) data licenses
+all: $(EXE) $(if $(filter-out 1,$(STATIC_GAMELIB)),$(if $(GEN_SRC),$(GAMELIB))) $(if $(filter windows,$(PLATFORM)),bundle) $(if $(filter darwin,$(PLATFORM)),,data licenses)
 
 $(O)/gen/%.o: $(GEN)/%.c runtime/cpu.h runtime/vfp.h runtime/neon_rt.h
 	@mkdir -p $(dir $@)
@@ -136,11 +158,17 @@ $(O)/imgui/%.o: $(IMGUI)/%.cpp
 
 $(O)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc -c $< -o $@
+	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc $(if $(DEPS),-I$(DEPS)/include) $(OSFLAGS) -c $< -o $@
 
+ifeq ($(STATIC_GAMELIB),1)
+$(EXE): $(RT_OBJ) $(GEN_OBJ) $(AV_DEPS)
+	@mkdir -p $(dir $@)
+	$(CXX) -o $@ $^ $(LDFLAGS)
+else
 $(EXE): $(RT_OBJ) $(AV_DEPS)
 	@mkdir -p $(dir $@)
 	$(CXX) -o $@ $^ $(LDFLAGS)
+endif
 
 # the bundled FFmpeg (see FFMPEG above): download, check, configure, build into $(FFMPEG_DIR)
 $(FFMPEG_TAR):
