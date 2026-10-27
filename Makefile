@@ -39,7 +39,11 @@ RT_HDRS  := $(wildcard runtime/*.h) $(wildcard runtime/platform/*.h) $(wildcard 
 # use: MP4 holding H.264 video and AAC audio. Nothing to install or ship (Linux distributions carry different FFmpeg
 # versions, and an executable linked to one doesn't start with another), and no GPL parts: FFmpeg's LGPL 2.1 only.
 # FFMPEG=system links the system's own avformat / avcodec / avutil instead.
-FFMPEG        ?= bundled
+ifeq ($(PLATFORM),darwin)
+FFMPEG   ?= none
+else
+FFMPEG   ?= bundled
+endif
 FFMPEG_VER    := 9.0.2
 FFMPEG_SHA256 := 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 FFMPEG_TAR    := third_party/ffmpeg/ffmpeg-$(FFMPEG_VER).tar.xz
@@ -51,7 +55,10 @@ FFMPEG_CONF   := --disable-everything --disable-programs --disable-doc --disable
                  --enable-parser=h264,aac --enable-decoder=h264,aac
 # (nasm: FFmpeg's assembly for x86; without it the plain C versions, fast enough for 960x540 movies)
 FFMPEG_CONF   += $(if $(shell command -v nasm 2>/dev/null),,--disable-x86asm)
-ifeq ($(FFMPEG),system)
+ifeq ($(FFMPEG),none)
+AV_DEPS  :=
+AV_LIBS  :=
+else ifeq ($(FFMPEG),system)
 AV_LIBS  := -lavformat -lavcodec -lavutil
 AV_DEPS  :=
 else
@@ -174,7 +181,7 @@ endif
 $(FFMPEG_TAR):
 	@mkdir -p $(dir $@)
 	curl -fL --retry 3 -o $@.part https://ffmpeg.org/releases/ffmpeg-$(FFMPEG_VER).tar.xz
-	echo "$(FFMPEG_SHA256)  $@.part" | sha256sum -c -
+	echo "$(FFMPEG_SHA256)  $@.part" | (sha256sum -c - 2>/dev/null || shasum -a 256 -c -)
 	mv -f $@.part $@
 
 $(FFMPEG_DIR)/.built: $(FFMPEG_TAR)
