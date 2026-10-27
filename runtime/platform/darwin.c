@@ -178,24 +178,55 @@ static bool mkdir_p(const char *path) {
     return mkdir(buf, 0777) == 0 || errno == EEXIST;
 }
 
-static bool s_standalone_done = false;
+#if defined(__APPLE__)
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+
+// Fallback in case iOS doesn't invoke scene delegate
+@interface SDLUIKitSceneDelegate : NSObject
+- (void)postFinishLaunch;
+@end
+
+@interface SDLUIKitSceneDelegate (FallbackLaunch) <UIApplicationDelegate>
+@end
+
+@implementation SDLUIKitSceneDelegate (FallbackLaunch)
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    [self performSelector:@selector(postFinishLaunch) withObject:nil afterDelay:0.0];
+    return YES;
+}
+@end
+#endif
 
 void plat_standalone(void) {
-    if (s_standalone_done) return;
-    s_standalone_done = true;
-
-    const char *home = getenv("HOME");
     char doc_dir[PATH_MAX] = "";
-    if (home && *home) {
-        snprintf(doc_dir, sizeof doc_dir, "%s/Documents", home);
-        mkdir_p(doc_dir);
-        if (chdir(doc_dir) != 0) { /* fallback to current dir */ }
-    } else {
-        char exe[PATH_MAX];
-        if (plat_exe_path(exe, sizeof exe)) {
-            char *s = strrchr(exe, '/');
-            if (s) { *s = 0; if (chdir(exe) != 0) {} }
+
+#if defined(__APPLE__)
+    @autoreleasepool {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *docPath = [paths firstObject];
+        if (docPath && [docPath length] > 0) {
+            snprintf(doc_dir, sizeof doc_dir, "%s", [docPath UTF8String]);
         }
+    }
+#endif
+
+    if (!doc_dir[0]) {
+        const char *home = getenv("HOME");
+        if (home && *home) {
+            snprintf(doc_dir, sizeof doc_dir, "%s/Documents", home);
+        } else {
+            char exe[PATH_MAX];
+            if (plat_exe_path(exe, sizeof exe)) {
+                char *s = strrchr(exe, '/');
+                if (s) { *s = 0; snprintf(doc_dir, sizeof doc_dir, "%s", exe); }
+            }
+        }
+    }
+
+    if (doc_dir[0]) {
+        mkdir_p(doc_dir);
+        chdir(doc_dir);
     }
 
     mkdir_p("data/exefs");
@@ -212,12 +243,16 @@ void plat_standalone(void) {
         fclose(rf);
     }
 
-    if (freopen("log.txt", "w", stderr)) {
-        setvbuf(stderr, NULL, _IONBF, 0);
-        dup2(fileno(stderr), STDOUT_FILENO);
-        g_own_log = true;
+    static bool s_log_opened = false;
+    if (!s_log_opened) {
+        if (freopen("log.txt", "w", stderr)) {
+            setvbuf(stderr, NULL, _IONBF, 0);
+            dup2(fileno(stderr), STDOUT_FILENO);
+            g_own_log = true;
+            s_log_opened = true;
+        }
     }
-    fprintf(stderr, "[plat] Darwin init complete. Working dir: %s\n", doc_dir[0] ? doc_dir : ".");
+    fprintf(stderr, "[plat] Working directory set to: %s\n", doc_dir[0] ? doc_dir : ".");
 }
 
 #if defined(__APPLE__)
@@ -228,6 +263,16 @@ __attribute__((constructor(100))) static void darwin_early_ctor(void) {
 #endif
 
 bool plat_user_dir(char *buf, size_t size) {
+#if defined(__APPLE__)
+    @autoreleasepool {
+        NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+        NSString *docPath = [paths firstObject];
+        if (docPath && [docPath length] > 0) {
+            snprintf(buf, size, "%s", [docPath UTF8String]);
+            return true;
+        }
+    }
+#endif
     const char *home = getenv("HOME");
     if (!home || !*home) return false;
     char dir[PATH_MAX];

@@ -77,12 +77,24 @@ static void boot(const char *root) {
 
 #if defined(__APPLE__)
 static void show_missing_files_screen(const char *main_path) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) return;
-    SDL_Window *win = SDL_CreateWindow("MHGU Recomp", 1280, 720, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        fprintf(stderr, "[ui] SDL_Init(VIDEO) failed: %s\n", SDL_GetError());
+        return;
+    }
+    SDL_Window *win = SDL_CreateWindow("MHGU Recomp", 0, 0, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!win) win = SDL_CreateWindow("MHGU Recomp", 1280, 720, 0);
-    if (!win) return;
+    if (!win) {
+        fprintf(stderr, "[ui] SDL_CreateWindow failed: %s\n", SDL_GetError());
+        return;
+    }
     SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);
-    if (!ren) { SDL_DestroyWindow(win); return; }
+    if (!ren) ren = SDL_CreateRenderer(win, "metal");
+    if (!ren) ren = SDL_CreateRenderer(win, "software");
+    if (!ren) {
+        fprintf(stderr, "[ui] SDL_CreateRenderer failed: %s\n", SDL_GetError());
+        SDL_DestroyWindow(win);
+        return;
+    }
 
     bool running = true;
     while (running) {
@@ -177,7 +189,11 @@ int main(int argc, char **argv) {
             show_missing_files_screen(main_path);
             f = fopen(main_path, "rb");
         }
-#endif
+        if (!f) {
+            fprintf(stderr, "[main] Exiting cleanly until game files are provided in Files > On My iPad > MHGU Recomp > data\n");
+            return 0;
+        }
+#else
         if (!f) {
             const char *msg = "The game files were not found. Put your own dump's exefs and romfs folders in the data "
                               "folder next to mhgurecomp.exe (data\\exefs, data\\romfs).";
@@ -185,6 +201,7 @@ int main(int argc, char **argv) {
             plat_error_box(msg);
             return 1;
         }
+#endif
         // the recompiled code is v1.4.0's: another version's files don't fit it (NSO header +0x40: build id)
         static const uint8_t want[8] = {0xfb, 0x08, 0xf1, 0xd2, 0x0f, 0xd1, 0x20, 0x4f};
         uint8_t hdr[0x48] = {0};
