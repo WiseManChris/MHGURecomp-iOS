@@ -97,8 +97,11 @@ EXE      := $(B)/MHGURecomp
 STATIC_GAMELIB ?= 1
 FRAMEWORKS := -framework UIKit -framework Metal -framework QuartzCore -framework Foundation \
               -framework CoreGraphics -framework AudioToolbox -framework CoreAudio \
-              -framework GameController -framework CoreHaptics -framework IOKit
-LDFLAGS  := $(ARCH_FLAGS) -L$(DEPS)/lib -lSDL3 -lMoltenVK -lshaderc_combined $(FRAMEWORKS) -lc++
+              -framework GameController -framework CoreHaptics -framework IOKit \
+              -framework IOSurface -framework CoreVideo -framework CoreMedia \
+              -framework AVFoundation -framework CoreBluetooth -framework CoreMotion \
+              -framework OpenGLES
+LDFLAGS  := $(ARCH_FLAGS) -L$(DEPS)/lib -lSDL3 -lMoltenVK -lshaderc_combined $(FRAMEWORKS) -lc++ -Wl,-U,_OBJC_CLASS_$_MTLResidencySetDescriptor
 GAMELIB  := $(B)/mhgugame.dylib
 GAMELIB_LDFLAGS := -shared $(ARCH_FLAGS)
 else
