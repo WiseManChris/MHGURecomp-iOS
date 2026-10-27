@@ -49,6 +49,7 @@ void plat_standalone(void);
 bool plat_user_dir(char *buf, size_t size);
 void plat_error_box(const char *msg);
 void plat_fatal_notice(void);
+void plat_show_missing_files_screen(const char *main_path, const char *doc_path);
 
 // ---- diagnostics
 const char *plat_symbol(uint64_t pc, uint64_t *offset);

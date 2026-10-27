@@ -182,45 +182,284 @@ static bool mkdir_p(const char *path) {
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-// Fallback in case iOS doesn't invoke scene delegate
-@interface SDLUIKitSceneDelegate : NSObject
-- (void)postFinishLaunch;
-@end
-
-@interface SDLUIKitSceneDelegate (FallbackLaunch) <UIApplicationDelegate>
-@end
-
-@implementation SDLUIKitSceneDelegate (FallbackLaunch)
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    [self performSelector:@selector(postFinishLaunch) withObject:nil afterDelay:0.0];
-    return YES;
-}
-@end
-#endif
-
-void plat_standalone(void) {
-    char doc_dir[PATH_MAX] = "";
-
-#if defined(__APPLE__)
+void plat_setup_ios_documents(void) {
     @autoreleasepool {
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *docPath = [paths firstObject];
-        if (docPath && [docPath length] > 0) {
-            snprintf(doc_dir, sizeof doc_dir, "%s", [docPath UTF8String]);
+        if (!docPath || [docPath length] == 0) return;
+
+        NSFileManager *fm = [NSFileManager defaultManager];
+
+        // 1. Ensure Documents root directory exists
+        [fm createDirectoryAtPath:docPath withIntermediateDirectories:YES attributes:nil error:nil];
+
+        // 2. CRUCIAL FOR iOS FILES APP: Write a real, non-hidden file directly into Documents/
+        // Apple's fileproviderd hides app containers under "On My iPad" if Documents is empty!
+        NSString *readmePath = [docPath stringByAppendingPathComponent:@"README.txt"];
+        NSString *readmeContent =
+            @"======================================================\n"
+            @" Monster Hunter Generations Ultimate (MHGU Recomp)\n"
+            @" Native Switch ARM64 iOS / iPadOS Port\n"
+            @"======================================================\n\n"
+            @"HOW TO PLAY:\n\n"
+            @"1. Copy your Nintendo Switch v1.4.0 game dump into 'data/':\n"
+            @"     • data/exefs/main       (decompiled game executable)\n"
+            @"     • data/exefs/main.npdm  (game metadata)\n"
+            @"     • data/exefs/sdk        (if present in your dump)\n"
+            @"     • data/romfs/           (all game romfs asset folders)\n\n"
+            @"2. Your save files will be stored in 'save/' automatically.\n\n"
+            @"3. Game execution logs are written to 'log.txt'.\n\n"
+            @"Once you place your files, return to the MHGU Recomp app!\n";
+
+        [readmeContent writeToFile:readmePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+        // 3. Create subdirectories: data/exefs, data/romfs, save
+        NSString *dataPath = [docPath stringByAppendingPathComponent:@"data"];
+        NSString *exefsPath = [dataPath stringByAppendingPathComponent:@"exefs"];
+        NSString *romfsPath = [dataPath stringByAppendingPathComponent:@"romfs"];
+        NSString *savePath = [docPath stringByAppendingPathComponent:@"save"];
+
+        [fm createDirectoryAtPath:exefsPath withIntermediateDirectories:YES attributes:nil error:nil];
+        [fm createDirectoryAtPath:romfsPath withIntermediateDirectories:YES attributes:nil error:nil];
+        [fm createDirectoryAtPath:savePath withIntermediateDirectories:YES attributes:nil error:nil];
+
+        // 4. Placeholder instruction files inside exefs and romfs
+        NSString *exefsHelp = [exefsPath stringByAppendingPathComponent:@"put_main_and_npdm_here.txt"];
+        [@"Place 'main', 'main.npdm', and 'sdk' from your Switch v1.4.0 exefs here.\n"
+            writeToFile:exefsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+        NSString *romfsHelp = [romfsPath stringByAppendingPathComponent:@"put_romfs_folders_here.txt"];
+        [@"Place all folders and files from your Switch v1.4.0 romfs here.\n"
+            writeToFile:romfsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+        // 5. Open stderr and stdout log in Documents/log.txt
+        static bool s_log_opened = false;
+        if (!s_log_opened) {
+            NSString *logPath = [docPath stringByAppendingPathComponent:@"log.txt"];
+            if (freopen([logPath UTF8String], "a", stderr)) {
+                setvbuf(stderr, NULL, _IONBF, 0);
+                dup2(fileno(stderr), STDOUT_FILENO);
+                g_own_log = true;
+                s_log_opened = true;
+            }
         }
+
+        // 6. Set working directory to Documents
+        chdir([docPath UTF8String]);
+        fprintf(stderr, "[plat] Documents initialized at: %s\n", [docPath UTF8String]);
     }
+}
+
+@interface MHGUMissingFilesVC : UIViewController
+@property (nonatomic, copy) NSString *mainPath;
+@property (nonatomic, copy) NSString *docPath;
+@property (nonatomic, assign) BOOL filesFound;
+@property (nonatomic, strong) UILabel *statusLabel;
+@end
+
+@implementation MHGUMissingFilesVC
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskLandscape;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor colorWithRed:0.07 green:0.09 blue:0.13 alpha:1.0];
+
+    UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:self.view.bounds];
+    scrollView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [self.view addSubview:scrollView];
+
+    CGFloat width = self.view.bounds.size.width;
+    if (width < 600) width = 800;
+    UIView *container = [[UIView alloc] initWithFrame:CGRectMake(40, 24, width - 80, 540)];
+    container.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [scrollView addSubview:container];
+
+    // 1. App Title
+    UILabel *titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, container.bounds.size.width, 36)];
+    titleLabel.text = @"Monster Hunter Generations Ultimate";
+    titleLabel.font = [UIFont boldSystemFontOfSize:26];
+    titleLabel.textColor = [UIColor whiteColor];
+    titleLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [container addSubview:titleLabel];
+
+    // Subtitle
+    UILabel *subLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 38, container.bounds.size.width, 24)];
+    subLabel.text = @"Native ARM64 iOS / iPadOS Port (Switch v1.4.0)";
+    subLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    subLabel.textColor = [UIColor colorWithRed:0.6 green:0.65 blue:0.75 alpha:1.0];
+    subLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [container addSubview:subLabel];
+
+    // 2. Alert Badge Box
+    UIView *badgeBox = [[UIView alloc] initWithFrame:CGRectMake(0, 72, container.bounds.size.width, 48)];
+    badgeBox.backgroundColor = [UIColor colorWithRed:0.25 green:0.18 blue:0.05 alpha:1.0];
+    badgeBox.layer.cornerRadius = 8;
+    badgeBox.layer.borderWidth = 1;
+    badgeBox.layer.borderColor = [UIColor colorWithRed:0.85 green:0.65 blue:0.15 alpha:1.0].CGColor;
+    badgeBox.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [container addSubview:badgeBox];
+
+    UILabel *badgeText = [[UILabel alloc] initWithFrame:CGRectMake(16, 0, badgeBox.bounds.size.width - 32, 48)];
+    badgeText.text = @"⚠️  Action Required: Game dump files not found";
+    badgeText.font = [UIFont boldSystemFontOfSize:16];
+    badgeText.textColor = [UIColor colorWithRed:1.0 green:0.85 blue:0.4 alpha:1.0];
+    badgeText.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [badgeBox addSubview:badgeText];
+
+    // 3. Instruction Card
+    UIView *card = [[UIView alloc] initWithFrame:CGRectMake(0, 130, container.bounds.size.width, 240)];
+    card.backgroundColor = [UIColor colorWithRed:0.11 green:0.14 blue:0.20 alpha:1.0];
+    card.layer.cornerRadius = 10;
+    card.layer.borderWidth = 1;
+    card.layer.borderColor = [UIColor colorWithRed:0.2 green:0.25 blue:0.35 alpha:1.0].CGColor;
+    card.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [container addSubview:card];
+
+    UILabel *cardTitle = [[UILabel alloc] initWithFrame:CGRectMake(20, 14, card.bounds.size.width - 40, 24)];
+    cardTitle.text = @"The MHGU Recomp folder is ready in your Files app:";
+    cardTitle.font = [UIFont boldSystemFontOfSize:17];
+    cardTitle.textColor = [UIColor whiteColor];
+    [card addSubview:cardTitle];
+
+    UITextView *infoText = [[UITextView alloc] initWithFrame:CGRectMake(16, 42, card.bounds.size.width - 32, 185)];
+    infoText.backgroundColor = [UIColor clearColor];
+    infoText.editable = NO;
+    infoText.selectable = NO;
+    infoText.scrollEnabled = NO;
+    infoText.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    infoText.font = [UIFont monospacedSystemFontOfSize:13 weight:UIFontWeightRegular];
+    infoText.textColor = [UIColor colorWithRed:0.85 green:0.90 blue:0.95 alpha:1.0];
+    infoText.text = [NSString stringWithFormat:
+        @"1. Open the iPad 'Files' app (Split View or Slide Over supported).\n"
+        @"2. Tap: 'On My iPad' -> 'MHGU Recomp' -> 'data'\n"
+        @"3. Copy your Nintendo Switch v1.4.0 dump files into 'data':\n"
+        @"     • data/exefs/main       (decompiled binary)\n"
+        @"     • data/exefs/main.npdm  (program metadata)\n"
+        @"     • data/exefs/sdk        (if present)\n"
+        @"     • data/romfs/           (all game romfs asset folders)\n\n"
+        @"Looking for: %@\n", self.mainPath ? self.mainPath : @"data/exefs/main"];
+    [card addSubview:infoText];
+
+    // 4. Action Buttons
+    UIButton *checkBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    checkBtn.frame = CGRectMake(0, 385, 240, 48);
+    checkBtn.backgroundColor = [UIColor colorWithRed:0.15 green:0.55 blue:0.35 alpha:1.0];
+    [checkBtn setTitle:@"🔄  Check Files Again" forState:UIControlStateNormal];
+    [checkBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    checkBtn.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    checkBtn.layer.cornerRadius = 8;
+    [checkBtn addTarget:self action:@selector(onCheckFiles:) forControlEvents:UIControlEventTouchUpInside];
+    [container addSubview:checkBtn];
+
+    UIButton *exitBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+    exitBtn.frame = CGRectMake(250, 385, 100, 48);
+    exitBtn.backgroundColor = [UIColor colorWithRed:0.30 green:0.15 blue:0.15 alpha:1.0];
+    [exitBtn setTitle:@"Exit" forState:UIControlStateNormal];
+    [exitBtn setTitleColor:[UIColor colorWithRed:1.0 green:0.6 blue:0.6 alpha:1.0] forState:UIControlStateNormal];
+    exitBtn.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightMedium];
+    exitBtn.layer.cornerRadius = 8;
+    [exitBtn addTarget:self action:@selector(onExitApp:) forControlEvents:UIControlEventTouchUpInside];
+    [container addSubview:exitBtn];
+
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(365, 385, container.bounds.size.width - 365, 48)];
+    self.statusLabel.font = [UIFont systemFontOfSize:14];
+    self.statusLabel.textColor = [UIColor colorWithRed:0.7 green:0.75 blue:0.85 alpha:1.0];
+    self.statusLabel.numberOfLines = 2;
+    self.statusLabel.text = @"Waiting for game files... (auto-checks every 2 seconds)";
+    self.statusLabel.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [container addSubview:self.statusLabel];
+
+    scrollView.contentSize = CGSizeMake(self.view.bounds.size.width, 500);
+}
+
+- (void)onCheckFiles:(id)sender {
+    if (!self.mainPath) return;
+    FILE *f = fopen([self.mainPath UTF8String], "rb");
+    if (f) {
+        fclose(f);
+        self.statusLabel.textColor = [UIColor colorWithRed:0.3 green:0.9 blue:0.4 alpha:1.0];
+        self.statusLabel.text = @"Game files verified! Starting game...";
+        self.filesFound = YES;
+    } else {
+        self.statusLabel.textColor = [UIColor colorWithRed:1.0 green:0.4 blue:0.4 alpha:1.0];
+        self.statusLabel.text = [NSString stringWithFormat:@"'main' not found yet at:\n%@", self.mainPath];
+    }
+}
+
+- (void)onExitApp:(id)sender {
+    exit(0);
+}
+
+@end
+
+void plat_show_missing_files_screen(const char *main_path, const char *doc_path) {
+    @autoreleasepool {
+        UIWindowScene *activeScene = nil;
+        if (@available(iOS 13.0, *)) {
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    activeScene = (UIWindowScene *)scene;
+                    break;
+                }
+            }
+        }
+
+        UIWindow *window = nil;
+        if (activeScene) {
+            window = [[UIWindow alloc] initWithWindowScene:activeScene];
+        } else {
+            window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        }
+        window.windowLevel = UIWindowLevelAlert + 1.0;
+
+        MHGUMissingFilesVC *vc = [[MHGUMissingFilesVC alloc] init];
+        vc.mainPath = [NSString stringWithUTF8String:main_path];
+        vc.docPath = doc_path ? [NSString stringWithUTF8String:doc_path] : nil;
+        window.rootViewController = vc;
+        [window makeKeyAndVisible];
+
+        while (!vc.filesFound) {
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+
+            FILE *f = fopen(main_path, "rb");
+            if (f) {
+                fclose(f);
+                vc.filesFound = YES;
+                break;
+            }
+        }
+
+        window.hidden = YES;
+        [window resignKeyWindow];
+        window.rootViewController = nil;
+    }
+}
+#else
+void plat_show_missing_files_screen(const char *main_path, const char *doc_path) {
+    (void)main_path; (void)doc_path;
+}
 #endif
 
-    if (!doc_dir[0]) {
-        const char *home = getenv("HOME");
-        if (home && *home) {
-            snprintf(doc_dir, sizeof doc_dir, "%s/Documents", home);
-        } else {
-            char exe[PATH_MAX];
-            if (plat_exe_path(exe, sizeof exe)) {
-                char *s = strrchr(exe, '/');
-                if (s) { *s = 0; snprintf(doc_dir, sizeof doc_dir, "%s", exe); }
-            }
+void plat_standalone(void) {
+#if defined(__APPLE__)
+    plat_setup_ios_documents();
+#else
+    char doc_dir[PATH_MAX] = "";
+    const char *home = getenv("HOME");
+    if (home && *home) {
+        snprintf(doc_dir, sizeof doc_dir, "%s/Documents", home);
+    } else {
+        char exe[PATH_MAX];
+        if (plat_exe_path(exe, sizeof exe)) {
+            char *s = strrchr(exe, '/');
+            if (s) { *s = 0; snprintf(doc_dir, sizeof doc_dir, "%s", exe); }
         }
     }
 
@@ -232,33 +471,13 @@ void plat_standalone(void) {
     mkdir_p("data/exefs");
     mkdir_p("data/romfs");
     mkdir_p("save");
-    FILE *rf = fopen("data/README.txt", "w");
-    if (rf) {
-        fprintf(rf, "Monster Hunter Generations Ultimate (Switch v1.4.0)\n\n"
-                    "Place your extracted game files here:\n"
-                    "  data/exefs/main\n"
-                    "  data/exefs/sdk\n"
-                    "  data/exefs/main.npdm\n"
-                    "  data/romfs/... (extracted romfs files)\n");
-        fclose(rf);
-    }
-
-    static bool s_log_opened = false;
-    if (!s_log_opened) {
-        if (freopen("log.txt", "w", stderr)) {
-            setvbuf(stderr, NULL, _IONBF, 0);
-            dup2(fileno(stderr), STDOUT_FILENO);
-            g_own_log = true;
-            s_log_opened = true;
-        }
-    }
-    fprintf(stderr, "[plat] Working directory set to: %s\n", doc_dir[0] ? doc_dir : ".");
+#endif
 }
 
 #if defined(__APPLE__)
 // Run at dynamic load time before constructor(101) reserve_guest_space
 __attribute__((constructor(100))) static void darwin_early_ctor(void) {
-    plat_standalone();
+    plat_setup_ios_documents();
 }
 #endif
 

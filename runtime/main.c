@@ -75,86 +75,6 @@ static void boot(const char *root) {
     kernel_run_main(t, t->handle, 0, init_fn, main_init_fn);
 }
 
-#if defined(__APPLE__)
-static void show_missing_files_screen(const char *main_path) {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        fprintf(stderr, "[ui] SDL_Init(VIDEO) failed: %s\n", SDL_GetError());
-        return;
-    }
-    SDL_Window *win = SDL_CreateWindow("MHGU Recomp", 0, 0, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
-    if (!win) win = SDL_CreateWindow("MHGU Recomp", 1280, 720, 0);
-    if (!win) {
-        fprintf(stderr, "[ui] SDL_CreateWindow failed: %s\n", SDL_GetError());
-        return;
-    }
-    SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);
-    if (!ren) ren = SDL_CreateRenderer(win, "metal");
-    if (!ren) ren = SDL_CreateRenderer(win, "software");
-    if (!ren) {
-        fprintf(stderr, "[ui] SDL_CreateRenderer failed: %s\n", SDL_GetError());
-        SDL_DestroyWindow(win);
-        return;
-    }
-
-    bool running = true;
-    while (running) {
-        SDL_Event e;
-        while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_EVENT_QUIT) {
-                SDL_DestroyRenderer(ren);
-                SDL_DestroyWindow(win);
-                SDL_QuitSubSystem(SDL_INIT_VIDEO);
-                exit(0);
-            }
-            if (e.type == SDL_EVENT_FINGER_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-                FILE *test = fopen(main_path, "rb");
-                if (test) { fclose(test); running = false; break; }
-            }
-        }
-
-        static uint64_t last_check = 0;
-        uint64_t now = SDL_GetTicks();
-        if (now - last_check > 1500) {
-            last_check = now;
-            FILE *test = fopen(main_path, "rb");
-            if (test) { fclose(test); running = false; break; }
-        }
-
-        SDL_SetRenderDrawColor(ren, 15, 23, 42, 255);
-        SDL_RenderClear(ren);
-
-        SDL_SetRenderScale(ren, 2.0f, 2.0f);
-        SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
-        SDL_RenderDebugText(ren, 20, 20, "Monster Hunter Generations Ultimate (Switch v1.4.0)");
-
-        SDL_SetRenderDrawColor(ren, 251, 191, 36, 255);
-        SDL_RenderDebugText(ren, 20, 50, ">> Game Files Needed <<");
-
-        SDL_SetRenderDrawColor(ren, 226, 232, 240, 255);
-        SDL_RenderDebugText(ren, 20, 80, "The app folder is now ready in the Files app:");
-        SDL_SetRenderDrawColor(ren, 56, 189, 248, 255);
-        SDL_RenderDebugText(ren, 20, 100, "Files -> On My iPad -> MHGU Recomp -> data");
-
-        SDL_SetRenderDrawColor(ren, 203, 213, 225, 255);
-        SDL_RenderDebugText(ren, 20, 130, "Copy your Switch v1.4.0 game dump into 'data':");
-        SDL_RenderDebugText(ren, 40, 150, "- data/exefs/main");
-        SDL_RenderDebugText(ren, 40, 165, "- data/exefs/sdk");
-        SDL_RenderDebugText(ren, 40, 180, "- data/exefs/main.npdm");
-        SDL_RenderDebugText(ren, 40, 195, "- data/romfs/... (all romfs folders)");
-
-        SDL_SetRenderDrawColor(ren, 74, 222, 128, 255);
-        SDL_RenderDebugText(ren, 20, 230, "After copying files, tap the screen to play!");
-
-        SDL_RenderPresent(ren);
-        SDL_Delay(30);
-    }
-
-    SDL_DestroyRenderer(ren);
-    SDL_DestroyWindow(win);
-    SDL_QuitSubSystem(SDL_INIT_VIDEO);
-}
-#endif
-
 int main(int argc, char **argv) {
     plat_init();
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -171,6 +91,13 @@ int main(int argc, char **argv) {
             if (s2 > s) s = s2;
             if (s) *s = 0, snprintf(data, sizeof data, "%s/data", exe);
         }
+#if defined(__APPLE__)
+        char doc[1024] = {0};
+        if (plat_user_dir(doc, sizeof doc)) {
+            snprintf(data, sizeof data, "%s/data", doc);
+            chdir(doc);
+        }
+#endif
         g_game_dir = data;
         mods_make_dir();
         cheats_make_dir();
@@ -186,12 +113,8 @@ int main(int argc, char **argv) {
         FILE *f = fopen(main_path, "rb");
 #if defined(__APPLE__)
         if (!f) {
-            show_missing_files_screen(main_path);
+            plat_show_missing_files_screen(main_path, doc[0] ? doc : NULL);
             f = fopen(main_path, "rb");
-        }
-        if (!f) {
-            fprintf(stderr, "[main] Exiting cleanly until game files are provided in Files > On My iPad > MHGU Recomp > data\n");
-            return 0;
         }
 #else
         if (!f) {
