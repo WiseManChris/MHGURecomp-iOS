@@ -199,7 +199,7 @@ $(FFMPEG_DIR)/.built: $(FFMPEG_TAR)
 
 $(FFMPEG_LIBS): $(FFMPEG_DIR)/.built ;
 
-ifneq ($(FFMPEG),system)
+ifeq ($(FFMPEG),bundled)
 $(O)/rt/hle/movie.o: $(FFMPEG_DIR)/.built
 $(O)/rt/hle/movie.o: RTFLAGS += -I$(FFMPEG_DIR)/include
 endif
