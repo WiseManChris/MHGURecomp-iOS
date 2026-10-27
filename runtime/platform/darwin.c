@@ -21,6 +21,13 @@
 
 #include "../platform.h"
 
+#if defined(__APPLE__)
+// MoltenVK references MTLResidencySetDescriptor (Metal 3.2 / iOS 18+).
+// On iOS < 18 or when linking against older SDKs (e.g. iOS 17), provide a weak
+// symbol so the Mach-O links cleanly without undefined symbol errors.
+__attribute__((weak)) void *OBJC_CLASS_$_MTLResidencySetDescriptor = NULL;
+#endif
+
 // ---- guest address space
 static uint64_t g_lo, g_hi;
 #define COMMIT_CHUNK 0x10000ull
