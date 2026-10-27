@@ -167,9 +167,14 @@ static bool mkdir_p(const char *path) {
     for (char *s = buf + 1; *s; s++) {
         if (*s != '/') continue;
         *s = 0;
-        if (mkdir(buf, 0777) != 0 && errno != EEXIST) return false;
+        struct stat st;
+        if (stat(buf, &st) != 0) {
+            if (mkdir(buf, 0777) != 0 && errno != EEXIST) return false;
+        }
         *s = '/';
     }
+    struct stat st;
+    if (stat(buf, &st) == 0 && S_ISDIR(st.st_mode)) return true;
     return mkdir(buf, 0777) == 0 || errno == EEXIST;
 }
 
@@ -195,6 +200,7 @@ void plat_standalone(void) {
 
     mkdir_p("data/exefs");
     mkdir_p("data/romfs");
+    mkdir_p("save");
     FILE *rf = fopen("data/README.txt", "w");
     if (rf) {
         fprintf(rf, "Monster Hunter Generations Ultimate (Switch v1.4.0)\n\n"
@@ -211,7 +217,7 @@ void plat_standalone(void) {
         dup2(fileno(stderr), STDOUT_FILENO);
         g_own_log = true;
     }
-    fprintf(stderr, "[plat] Darwin early init complete. Working dir: %s\n", doc_dir[0] ? doc_dir : ".");
+    fprintf(stderr, "[plat] Darwin init complete. Working dir: %s\n", doc_dir[0] ? doc_dir : ".");
 }
 
 #if defined(__APPLE__)

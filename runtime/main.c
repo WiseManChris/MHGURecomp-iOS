@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
 #include "gamelib.h"
@@ -74,6 +75,74 @@ static void boot(const char *root) {
     kernel_run_main(t, t->handle, 0, init_fn, main_init_fn);
 }
 
+#if defined(__APPLE__)
+static void show_missing_files_screen(const char *main_path) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) return;
+    SDL_Window *win = SDL_CreateWindow("MHGU Recomp", 1280, 720, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    if (!win) win = SDL_CreateWindow("MHGU Recomp", 1280, 720, 0);
+    if (!win) return;
+    SDL_Renderer *ren = SDL_CreateRenderer(win, NULL);
+    if (!ren) { SDL_DestroyWindow(win); return; }
+
+    bool running = true;
+    while (running) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_EVENT_QUIT) {
+                SDL_DestroyRenderer(ren);
+                SDL_DestroyWindow(win);
+                SDL_QuitSubSystem(SDL_INIT_VIDEO);
+                exit(0);
+            }
+            if (e.type == SDL_EVENT_FINGER_DOWN || e.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                FILE *test = fopen(main_path, "rb");
+                if (test) { fclose(test); running = false; break; }
+            }
+        }
+
+        static uint64_t last_check = 0;
+        uint64_t now = SDL_GetTicks();
+        if (now - last_check > 1500) {
+            last_check = now;
+            FILE *test = fopen(main_path, "rb");
+            if (test) { fclose(test); running = false; break; }
+        }
+
+        SDL_SetRenderDrawColor(ren, 15, 23, 42, 255);
+        SDL_RenderClear(ren);
+
+        SDL_SetRenderScale(ren, 2.0f, 2.0f);
+        SDL_SetRenderDrawColor(ren, 255, 255, 255, 255);
+        SDL_RenderDebugText(ren, 20, 20, "Monster Hunter Generations Ultimate (Switch v1.4.0)");
+
+        SDL_SetRenderDrawColor(ren, 251, 191, 36, 255);
+        SDL_RenderDebugText(ren, 20, 50, ">> Game Files Needed <<");
+
+        SDL_SetRenderDrawColor(ren, 226, 232, 240, 255);
+        SDL_RenderDebugText(ren, 20, 80, "The app folder is now ready in the Files app:");
+        SDL_SetRenderDrawColor(ren, 56, 189, 248, 255);
+        SDL_RenderDebugText(ren, 20, 100, "Files -> On My iPad -> MHGU Recomp -> data");
+
+        SDL_SetRenderDrawColor(ren, 203, 213, 225, 255);
+        SDL_RenderDebugText(ren, 20, 130, "Copy your Switch v1.4.0 game dump into 'data':");
+        SDL_RenderDebugText(ren, 40, 150, "- data/exefs/main");
+        SDL_RenderDebugText(ren, 40, 165, "- data/exefs/sdk");
+        SDL_RenderDebugText(ren, 40, 180, "- data/exefs/main.npdm");
+        SDL_RenderDebugText(ren, 40, 195, "- data/romfs/... (all romfs folders)");
+
+        SDL_SetRenderDrawColor(ren, 74, 222, 128, 255);
+        SDL_RenderDebugText(ren, 20, 230, "After copying files, tap the screen to play!");
+
+        SDL_RenderPresent(ren);
+        SDL_Delay(30);
+    }
+
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
+    SDL_QuitSubSystem(SDL_INIT_VIDEO);
+}
+#endif
+
 int main(int argc, char **argv) {
     plat_init();
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -103,15 +172,18 @@ int main(int argc, char **argv) {
         char main_path[1200];
         snprintf(main_path, sizeof main_path, "%s/exefs/main", data);
         FILE *f = fopen(main_path, "rb");
+#if defined(__APPLE__)
         if (!f) {
-            const char *msg = "Welcome to MHGURecomp for iOS!\n\n"
-                              "Game files not found. A folder structure has been prepared for you in the Files app under:\n"
-                              "On My iPad > MHGU Recomp > data\n\n"
-                              "Please copy your Switch v1.4.0 'exefs' and 'romfs' folders into that 'data' folder and launch the app again.";
+            show_missing_files_screen(main_path);
+            f = fopen(main_path, "rb");
+        }
+#endif
+        if (!f) {
+            const char *msg = "The game files were not found. Put your own dump's exefs and romfs folders in the data "
+                              "folder next to mhgurecomp.exe (data\\exefs, data\\romfs).";
             fprintf(stderr, "%s\n", msg);
-            SDL_Init(SDL_INIT_VIDEO);
             plat_error_box(msg);
-            return 0;
+            return 1;
         }
         // the recompiled code is v1.4.0's: another version's files don't fit it (NSO header +0x40: build id)
         static const uint8_t want[8] = {0xfb, 0x08, 0xf1, 0xd2, 0x0f, 0xd1, 0x20, 0x4f};
