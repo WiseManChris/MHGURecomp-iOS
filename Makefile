@@ -20,7 +20,11 @@ B        ?= build
 O        ?= obj
 CC       := clang
 CXX      := clang++
+ifeq ($(PLATFORM),darwin)
+GENARCH  ?=
+else
 GENARCH  ?= -march=x86-64-v3  # AVX2 + FMA (Haswell or newer)
+endif
 GENFLAGS := -O1 -fno-strict-aliasing -ffp-contract=off -fno-math-errno -Wno-return-type -Wno-unused-label \
             -Wno-parentheses-equality -Wno-unused-value -fvisibility=hidden -Iruntime $(GENARCH)
 
