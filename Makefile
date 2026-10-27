@@ -158,7 +158,7 @@ $(O)/imgui/%.o: $(IMGUI)/%.cpp
 
 $(O)/rt/nvn/vulkan/vma.o: runtime/nvn/vulkan/vma.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -O2 -w -Ithird_party/vk_mem_alloc $(if $(DEPS),-I$(DEPS)/include) $(OSFLAGS) -c $< -o $@
+	$(CXX) -std=c++17 -O2 -w -Ithird_party/vk_mem_alloc $(if $(DEPS),-I$(DEPS)/include) $(OSFLAGS) -c $< -o $@
 
 ifeq ($(STATIC_GAMELIB),1)
 $(EXE): $(RT_OBJ) $(GEN_OBJ) $(AV_DEPS)
