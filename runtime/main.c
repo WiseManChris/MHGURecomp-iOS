@@ -30,11 +30,11 @@ static void rtld_init_sdk(Cpu *c) { module_init(c, &g_modules[1]); }
 static void rtld_init_main(Cpu *c) { module_init(c, &g_modules[0]); }
 
 // Claim the guest window before anything else can map there.
-__attribute__((constructor(101))) static void reserve_guest_space(void) {
-    if (plat_reserve_guest(GUEST_BASE, GUEST_SPACE)) return;
-    fprintf(stderr, "FATAL: the guest address window at %llx is not free\n", (unsigned long long)GUEST_BASE);
-    plat_error_box("FATAL: Failed to reserve 4 GB guest virtual address space. Check log.txt or STARTUP_ERROR.txt in Files > MHGU Recomp.");
-    exit(1);
+static bool reserve_guest_space(void) {
+    if (plat_reserve_guest(GUEST_BASE, GUEST_SPACE)) return true;
+    fprintf(stderr, "FATAL: the guest address window is not free\n");
+    plat_error_box("FATAL: Failed to reserve 4 GB guest virtual address space. Check log.txt in Files > MHGU Recomp.");
+    return false;
 }
 
 static void boot(const char *root) {
@@ -77,6 +77,8 @@ static void boot(const char *root) {
 }
 
 int main(int argc, char **argv) {
+    plat_standalone();
+    if (!reserve_guest_space()) return 1;
     plat_init();
     setvbuf(stderr, NULL, _IONBF, 0);
     bool given = false;

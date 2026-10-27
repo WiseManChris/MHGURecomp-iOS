@@ -10,7 +10,8 @@
 
 #ifndef GUEST_BASE
 #if defined(__APPLE__)
-#define GUEST_BASE 0x400000000ull  // 16 GB: fits in unprivileged 36-bit iOS virtual address space (no special entitlements needed)
+extern uintptr_t g_guest_base;
+#define GUEST_BASE g_guest_base
 #else
 #define GUEST_BASE 0x10000000000ull  // 1 TB: claimed at startup (runtime/main.c)
 #endif

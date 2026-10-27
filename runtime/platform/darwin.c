@@ -59,27 +59,40 @@ static bool lazy_commit(uint64_t a) {
 
 static void fault_handler(int sig, siginfo_t *si, void *uc);
 
+uintptr_t g_guest_base = 0;
+
 bool plat_reserve_guest(uint64_t base, uint64_t size) {
-    fprintf(stderr, "[plat] plat_reserve_guest: requesting base=0x%llx, size=0x%llx (4 GB)...\n",
-            (unsigned long long)base, (unsigned long long)size);
-    void *p = mmap((void *)(uintptr_t)base, size, PROT_NONE,
-                   MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
-    if (p != (void *)(uintptr_t)base) {
-        fprintf(stderr, "[plat] FATAL: failed to reserve 0x%llx (size 0x%llx): mmap=%p (errno %d: %s)\n",
-                (unsigned long long)base, (unsigned long long)size, p, errno, strerror(errno));
-        FILE *ef = fopen("STARTUP_ERROR.txt", "w");
-        if (ef) {
-            fprintf(ef, "MHGURecomp Fatal Startup Error:\n");
-            fprintf(ef, "Failed to reserve 4 GB virtual guest memory at 0x%llx.\n", (unsigned long long)base);
-            fprintf(ef, "mmap error code %d: %s\n", errno, strerror(errno));
-            fclose(ef);
+    void *p = MAP_FAILED;
+
+    // 1. If a fixed base was specified, try it first
+    if (base != 0) {
+        p = mmap((void *)(uintptr_t)base, size, PROT_NONE,
+                 MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
+        if (p == (void *)(uintptr_t)base) {
+            fprintf(stderr, "[plat] Successfully reserved 4 GB guest space at fixed address %p\n", p);
+        } else {
+            p = MAP_FAILED;
         }
+    }
+
+    // 2. If fixed base was not specified or failed (e.g. unprivileged iOS virtual address limits),
+    // let the kernel allocate 4 GB anywhere in the process!
+    if (p == MAP_FAILED) {
+        p = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (p != MAP_FAILED) {
+            fprintf(stderr, "[plat] Successfully dynamically reserved 4 GB guest space at %p\n", p);
+        }
+    }
+
+    if (p == MAP_FAILED) {
+        fprintf(stderr, "[plat] FATAL: failed to reserve 4 GB virtual guest space: %s (errno %d)\n", strerror(errno), errno);
         return false;
     }
-    fprintf(stderr, "[plat] Successfully reserved 4 GB guest memory at %p!\n", p);
 
-    g_lo = base;
-    g_hi = base + size;
+    g_guest_base = (uintptr_t)p;
+    g_lo = g_guest_base;
+    g_hi = g_guest_base + size;
+    fprintf(stderr, "[plat] Guest memory active: 0x%llx - 0x%llx\n", (unsigned long long)g_lo, (unsigned long long)g_hi);
 
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -401,32 +414,52 @@ void plat_setup_ios_documents(void) {
 
 void plat_show_missing_files_screen(const char *main_path, const char *doc_path) {
     @autoreleasepool {
-        UIWindowScene *activeScene = nil;
-        if (@available(iOS 13.0, *)) {
-            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                if ([scene isKindOfClass:[UIWindowScene class]]) {
-                    activeScene = (UIWindowScene *)scene;
-                    break;
-                }
-            }
-        }
+        SDL_Init(SDL_INIT_VIDEO);
 
-        UIWindow *window = nil;
-        if (activeScene) {
-            window = [[UIWindow alloc] initWithWindowScene:activeScene];
-        } else {
-            window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        SDL_Window *win = SDL_CreateWindow("MHGU Recomp", 1920, 1080, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        if (!win) win = SDL_CreateWindow("MHGU Recomp", 1280, 720, 0);
+
+        UIWindow *targetWindow = nil;
+        if (win) {
+            SDL_PropertiesID props = SDL_GetWindowProperties(win);
+            targetWindow = (__bridge UIWindow *)SDL_GetPointerProperty(props, SDL_PROP_WINDOW_UIKIT_WINDOW_POINTER, NULL);
         }
-        window.windowLevel = UIWindowLevelAlert + 1.0;
 
         MHGUMissingFilesVC *vc = [[MHGUMissingFilesVC alloc] init];
         vc.mainPath = [NSString stringWithUTF8String:main_path];
         vc.docPath = doc_path ? [NSString stringWithUTF8String:doc_path] : nil;
-        window.rootViewController = vc;
-        [window makeKeyAndVisible];
+
+        UIWindow *standaloneWindow = nil;
+        if (targetWindow) {
+            vc.view.frame = targetWindow.bounds;
+            [targetWindow addSubview:vc.view];
+        } else {
+            UIWindowScene *activeScene = nil;
+            if (@available(iOS 13.0, *)) {
+                for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                    if ([scene isKindOfClass:[UIWindowScene class]]) {
+                        activeScene = (UIWindowScene *)scene;
+                        break;
+                    }
+                }
+            }
+            if (activeScene) {
+                standaloneWindow = [[UIWindow alloc] initWithWindowScene:activeScene];
+            } else {
+                standaloneWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+            }
+            standaloneWindow.windowLevel = UIWindowLevelAlert + 1.0;
+            standaloneWindow.rootViewController = vc;
+            [standaloneWindow makeKeyAndVisible];
+        }
 
         while (!vc.filesFound) {
-            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+            SDL_Event e;
+            while (SDL_PollEvent(&e)) {
+                if (e.type == SDL_EVENT_QUIT) exit(0);
+            }
+
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.25]];
 
             FILE *f = fopen(main_path, "rb");
             if (f) {
@@ -436,9 +469,17 @@ void plat_show_missing_files_screen(const char *main_path, const char *doc_path)
             }
         }
 
-        window.hidden = YES;
-        [window resignKeyWindow];
-        window.rootViewController = nil;
+        if (targetWindow) {
+            [vc.view removeFromSuperview];
+        }
+        if (standaloneWindow) {
+            standaloneWindow.hidden = YES;
+            [standaloneWindow resignKeyWindow];
+        }
+        if (win) {
+            SDL_DestroyWindow(win);
+            SDL_QuitSubSystem(SDL_INIT_VIDEO);
+        }
     }
 }
 #else
@@ -473,13 +514,6 @@ void plat_standalone(void) {
     mkdir_p("save");
 #endif
 }
-
-#if defined(__APPLE__)
-// Run at dynamic load time before constructor(101) reserve_guest_space
-__attribute__((constructor(100))) static void darwin_early_ctor(void) {
-    plat_setup_ios_documents();
-}
-#endif
 
 bool plat_user_dir(char *buf, size_t size) {
 #if defined(__APPLE__)
