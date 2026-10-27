@@ -35,6 +35,17 @@ HLE_FUNC("_ZN5movie11SetCoreMaskEy", movie_set_core_mask) { RET(0); }
 static void stub_err(Cpu *c) { RET(0x1000u); }
 static void stub_zero(Cpu *c) { RET(0); }
 
+static uint32_t make_vtable(HostFn *fns, int n, int kind) {
+    uint32_t t = hle_alloc(32 * 4);
+    char name[96];
+    for (int i = 0; i < 32; i++) {
+        snprintf(name, sizeof name, "<movie %s slot %d>", kind ? "Decoder" : "Extractor", i);
+        HostFn f = i < n ? fns[i] : NULL;
+        ST32(t + 4 * i, hle_register(name, f));
+    }
+    return t;
+}
+
 HLE_FUNC("_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE", movie_extractor_ctor) {
     static uint32_t vt;
     if (!vt) {
