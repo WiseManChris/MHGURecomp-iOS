@@ -63,10 +63,10 @@ jobs:
             -DSHADERC_SKIP_TESTS=ON \
             -DSHADERC_SKIP_EXAMPLES=ON \
             -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
-          cmake --build build --target libshaderc_combined --config Release -j$NCPU
+          cmake --build build --target shaderc_combined --config Release -j$NCPU
+          find build -name "libshaderc_combined.a" -exec cp {} ../deps/lib/libshaderc_combined.a \;
+          cp -r libshaderc/include/* ../deps/include/
           cd ..
-          cp shaderc-src/build/libshaderc/libshaderc_combined.a deps/lib/libshaderc_combined.a
-          cp -r shaderc-src/libshaderc/include/* deps/include/
           rm -rf shaderc-src
 
           echo "=== Dependencies setup complete ==="
