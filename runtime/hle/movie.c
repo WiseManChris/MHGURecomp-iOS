@@ -167,8 +167,11 @@ static uint32_t make_vtable(HostFn *fns, int n, int kind) {
     return t;
 }
 
+bool g_movie_active = false;
+
 // Extractor stub methods
 static void stub_ex_set_data_source(Cpu *c) {
+    g_movie_active = true;
     LOG("[movie] Extractor::SetDataSource: %s -> stubbing instant EOS playback\n",
         ARG(1) ? (const char *)G2H(ARG(1)) : "(null)");
     RET(0);
@@ -226,6 +229,7 @@ static void stub_ex_buffered_range(Cpu *c) {
 }
 
 HLE_FUNC("_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE", movie_extractor_ctor) {
+    g_movie_active = true;
     static uint32_t vt;
     if (!vt) {
         HostFn f[16];
@@ -844,6 +848,7 @@ EX_LOCKED(ex_buffered_range)
 
 // Extractor(ContainerType, CacheSize)
 HLE_FUNC("_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE", movie_extractor_ctor) {
+    g_movie_active = true;
     static uint32_t vt;
     if (!vt) {
         HostFn f[16] = {ex_dtor_l, ex_dtor_l, ex_set_data_source_path_l, movie_log_slot, ex_get_track_count_l,
