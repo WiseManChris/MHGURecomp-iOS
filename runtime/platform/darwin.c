@@ -24,6 +24,7 @@
 
 #if defined(__APPLE__)
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
 #endif
 
 // ---- guest address space
@@ -612,6 +613,25 @@ void plat_fatal_notice(void) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
+#if TARGET_OS_IPHONE
+@interface AlertReturnHandler : NSObject <UITextFieldDelegate>
+@property (nonatomic, copy) void (^onReturn)(void);
+@end
+
+@implementation AlertReturnHandler
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    if (self.onReturn) {
+        self.onReturn();
+    }
+    return YES;
+}
+- (void)dealloc {
+    [_onReturn release];
+    [super dealloc];
+}
+@end
+#endif
+
 int plat_ios_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
     (void)max_chars;
     __block int r = 0;
@@ -628,32 +648,51 @@ int plat_ios_text_input(const char *title, const char *sub, const char *guide, c
                                                                     message:m
                                                              preferredStyle:UIAlertControllerStyleAlert];
 
+        __block UIAlertController *blockAc = ac;
+        AlertReturnHandler *handler = [[AlertReturnHandler alloc] init];
+        objc_setAssociatedObject(ac, "_retHandler", handler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [handler release];
+
+        __block BOOL finished = NO;
+        void (^finish)(BOOL isOk) = ^(BOOL isOk) {
+            if (finished) return;
+            finished = YES;
+            r = isOk ? 1 : 0;
+            if (isOk) {
+                UITextField *tf = blockAc.textFields.firstObject;
+                if (tf && tf.text && tf.text.length > 0) {
+                    enteredText = [tf.text copy];
+                }
+            }
+            [blockAc dismissViewControllerAnimated:YES completion:nil];
+            dispatch_semaphore_signal(done);
+        };
+
+        handler.onReturn = ^{
+            finish(YES);
+        };
+
         [ac addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull f) {
             f.text = init;
             f.placeholder = ph;
             f.autocapitalizationType = UITextAutocapitalizationTypeWords;
             f.clearButtonMode = UITextFieldViewModeWhileEditing;
             f.returnKeyType = UIReturnKeyDone;
+            f.delegate = handler;
         }];
 
         UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"OK"
                                                            style:UIAlertActionStyleDefault
                                                          handler:^(UIAlertAction * _Nonnull action) {
             (void)action;
-            r = 1;
-            UITextField *tf = ac.textFields.firstObject;
-            if (tf && tf.text) {
-                enteredText = [tf.text copy];
-            }
-            dispatch_semaphore_signal(done);
+            finish(YES);
         }];
 
         UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel"
                                                                style:UIAlertActionStyleCancel
                                                              handler:^(UIAlertAction * _Nonnull action) {
             (void)action;
-            r = 0;
-            dispatch_semaphore_signal(done);
+            finish(NO);
         }];
 
         [ac addAction:okAction];
@@ -680,7 +719,7 @@ int plat_ios_text_input(const char *title, const char *sub, const char *guide, c
         }
 
         if (!vc) {
-            dispatch_semaphore_signal(done);
+            finish(NO);
             return;
         }
 

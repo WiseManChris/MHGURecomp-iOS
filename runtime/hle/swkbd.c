@@ -55,7 +55,7 @@ HLE_FUNC("_ZN2nn5swkbd25GetRequiredWorkBufferSizeEb", swkbd_work_size) { RET(0xD
 HLE_FUNC("_ZN2nn5swkbd27GetRequiredStringBufferSizeEv", swkbd_string_size) { RET(0x7D4); }
 
 // ---- inline keyboard: callbacks the game set, called from Calc on its own thread
-static uint32_t cb_init_done, cb_cancel, cb_enter, cb_changed, cb_moved, cb_released, init_pending;
+static uint32_t cb_init_done, cb_cancel, cb_enter, cb_changed, cb_moved, cb_released, cb_finished, init_pending;
 // SetUserWordInfo: the keyboard takes the word list (the player's earlier entries, as suggestions) and hands the
 // buffer back with the released-user-word-info callback, from Calc. The game waits for it before the keyboard appears
 // (the item set names of a character with earlier entries: without it, a 15 s dimmed screen and no keyboard).
@@ -72,7 +72,7 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard24SetDecidedCancelCallbackEPFvvE", ik_cb_c
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard27SetDecidedEnterCallbackUtf8EPFvPKNS0_19DecidedEnterArgUtf8EE", ik_cb_enter) { cb_enter = ARG(1); }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard28SetChangedStringCallbackUtf8EPFvPKNS0_20ChangedStringArgUtf8EE", ik_cb_changed) { cb_changed = ARG(1); }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard26SetMovedCursorCallbackUtf8EPFvPKNS0_18MovedCursorArgUtf8EE", ik_cb_moved) { cb_moved = ARG(1); }
-HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard27SetFinishedKeyboardCallbackEPFvvE", ik_cb_finished) { (void)c; }
+HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard27SetFinishedKeyboardCallbackEPFvvE", ik_cb_finished) { cb_finished = ARG(1); }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard31SetReleasedUserWordInfoCallbackEPFvvE", ik_cb_released) { cb_released = ARG(1); }
 
 static void callback(Cpu *c, uint32_t fn, uint32_t arg) {
@@ -84,6 +84,7 @@ static void callback(Cpu *c, uint32_t fn, uint32_t arg) {
 // Calc returns the keyboard's state (as the applet reports it): 0 not initialized, 1 ready and hidden, 3 shown. The
 // game's keyboard driver waits for 1 after a text entry (its "closed" step).
 static int ik_state;
+static int ik_ticks;
 static char ik_initial[ARG_TEXT_MAX + 4];
 static int ik_auto;  // MHGU_NAME / MHGU_INLINE_CANCEL: answered on the second Calc after Appear
 static int ik_pending_appear;
@@ -94,72 +95,73 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard4CalcEv", ik_calc) {
     if (init_pending == 0 && ik_state == 0) ik_state = 1;
     if (words_pending && cb_released) { words_pending = 0; guest_call(c, cb_released); }
 
-    if (ik_state == 3 && ik_auto && ++ik_auto > 2) {
-        const char *name = getenv("MHGU_NAME");
-        if (getenv("MHGU_INLINE_CANCEL")) callback(c, cb_cancel, 0);
-        else callback(c, cb_enter, cb_arg(name ? name : "Hunter"));
-        ik_auto = 0;
-        ik_state = 1;
-    } else if (ik_state == 3 && ik_pending_appear) {
-        ik_pending_appear = 0;
-        char text[ARG_TEXT_MAX + 4] = {0};
-        const char *script = getenv("MHGU_NAME");
-        int r = 0;
-        if (script && *script) {
-            snprintf(text, sizeof text, "%s", script);
-            r = 1;
+    if (ik_state == 3) {
+        ik_ticks++;
+        // CRITICAL: In MHGU's state machine (f_a62570), Appear moves state 6 -> state 7.
+        // In state 7, the game checks if Calc() returns >= 2 (state 3 == SHOWN).
+        // Only when it sees 3 does it advance from state 7 to state 8 ("shown waiting for enter").
+        // If Calc() returns 1 before state 8 is reached, f_a62570 stays in state 7 forever (dimmed screen)!
+        // Returning 3 on ticks 1 & 2 guarantees the game enters state 8 before input confirmation.
+        if (ik_ticks <= 2) {
+            memcpy(c->r, saved, sizeof saved);
+            RET(3);
+            return;
         }
+
+        if (ik_auto && ++ik_auto > 2) {
+            const char *name = getenv("MHGU_NAME");
+            if (getenv("MHGU_INLINE_CANCEL")) callback(c, cb_cancel, 0);
+            else callback(c, cb_enter, cb_arg(name ? name : "Hunter"));
+            ik_auto = 0;
+            ik_state = 1;
+        } else if (ik_pending_appear) {
+            ik_pending_appear = 0;
+            char text[ARG_TEXT_MAX + 4] = {0};
+            const char *script = getenv("MHGU_NAME");
+            int r = 0;
+            if (script && *script) {
+                snprintf(text, sizeof text, "%s", script);
+                r = 1;
+            }
 #if defined(__APPLE__)
-        else {
-            r = plat_ios_text_input("Hunter Name", "Type your character name:", "Hunter",
-                                    ik_initial[0] ? ik_initial : "Hunter", 16, text, sizeof text);
-        }
+            else {
+                r = plat_ios_text_input("Hunter Name", "Type your character name:", "Hunter",
+                                        ik_initial[0] ? ik_initial : "Hunter", 16, text, sizeof text);
+            }
 #endif
-        if (r > 0 && text[0]) {
-            LOG("[swkbd] inline keyboard entered name: \"%s\"\n", text);
-            uint32_t arg = cb_arg(text);
-            if (cb_changed) callback(c, cb_changed, arg);
-            if (cb_moved) callback(c, cb_moved, arg);
-            callback(c, cb_enter, arg);
-            textinput_end();
-            ik_state = 1;
-        } else if (getenv("MHGU_INLINE_CANCEL")) {
-            LOG("[swkbd] inline keyboard cancelled\n");
-            textinput_end();
-            callback(c, cb_cancel, 0);
-            ik_state = 1;
-        } else {
-            const char *def = ik_initial[0] ? ik_initial : "Hunter";
-            LOG("[swkbd] inline keyboard confirmed name: \"%s\"\n", def);
-            uint32_t arg = cb_arg(def);
-            if (cb_changed) callback(c, cb_changed, arg);
-            if (cb_moved) callback(c, cb_moved, arg);
-            callback(c, cb_enter, arg);
+            const char *confirmed = (r > 0 && text[0]) ? text : (ik_initial[0] ? ik_initial : "Hunter");
+            if (getenv("MHGU_INLINE_CANCEL")) {
+                LOG("[swkbd] inline keyboard cancelled\n");
+                callback(c, cb_cancel, 0);
+            } else {
+                LOG("[swkbd] inline keyboard confirmed name: \"%s\"\n", confirmed);
+                callback(c, cb_enter, cb_arg(confirmed));
+            }
             textinput_end();
             ik_state = 1;
         }
-    }
 #if !defined(__APPLE__)
-    else if (ik_state == 3 && !ik_auto) {
-        static char text[ARG_TEXT_MAX + 4];
-        int chars, ev = textinput_poll(text, sizeof text, &chars);
-        if (ev == TI_CHANGED) {
-            uint32_t arg = cb_arg(text);
-            callback(c, cb_changed, arg);
-            callback(c, cb_moved, arg);
-        } else if (ev == TI_ENTER) {
-            LOG("[swkbd] entered \"%s\"\n", text);
-            textinput_end();
-            callback(c, cb_enter, cb_arg(text));
-            ik_state = 1;
-        } else if (ev == TI_CANCEL) {
-            LOG("[swkbd] text entry cancelled\n");
-            textinput_end();
-            callback(c, cb_cancel, 0);
-            ik_state = 1;
+        else if (!ik_auto) {
+            static char text[ARG_TEXT_MAX + 4];
+            int chars, ev = textinput_poll(text, sizeof text, &chars);
+            if (ev == TI_CHANGED) {
+                uint32_t arg = cb_arg(text);
+                callback(c, cb_changed, arg);
+                callback(c, cb_moved, arg);
+            } else if (ev == TI_ENTER) {
+                LOG("[swkbd] entered \"%s\"\n", text);
+                textinput_end();
+                callback(c, cb_enter, cb_arg(text));
+                ik_state = 1;
+            } else if (ev == TI_CANCEL) {
+                LOG("[swkbd] text entry cancelled\n");
+                textinput_end();
+                callback(c, cb_cancel, 0);
+                ik_state = 1;
+            }
         }
-    }
 #endif
+    }
     memcpy(c->r, saved, sizeof saved);
     RET(ik_state);
 }
@@ -174,6 +176,7 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard6AppearERKNS0_9AppearArgE", ik_appear) {
     for (int i = 0; i < 0x30; i++) snprintf(hex + 3 * i, 4, " %02x", LD8(a + (uint32_t)i));
     LOG("[swkbd] inline keyboard shown (frame %llu), AppearArg%s\n", (unsigned long long)g_present_count, hex);
     ik_state = 3;
+    ik_ticks = 0;
     ik_auto = getenv("MHGU_NAME") || getenv("MHGU_INLINE_CANCEL") ? 1 : 0;
     ik_pending_appear = !ik_auto;
     textinput_begin(ik_initial, max);
@@ -184,6 +187,7 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard9DisappearEv", ik_disappear) {
     ik_pending_appear = 0;
     textinput_end();
     if (ik_state == 3) ik_state = 1;
+    if (cb_finished) guest_call(c, cb_finished);
 }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard11SetUtf8ModeEb", ik_utf8) { (void)c; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard12SetCursorPosEi", ik_cursor) { (void)c; }
