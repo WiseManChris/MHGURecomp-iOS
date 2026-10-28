@@ -198,6 +198,10 @@ static bool mkdir_p(const char *path) {
 
 void plat_setup_ios_documents(void) {
     @autoreleasepool {
+        static bool s_log_opened = false;
+        if (s_log_opened) return;
+        s_log_opened = true;
+
         NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
         NSString *docPath = [paths firstObject];
         if (!docPath || [docPath length] == 0) return;
@@ -207,7 +211,26 @@ void plat_setup_ios_documents(void) {
         // 1. Ensure Documents root directory exists
         [fm createDirectoryAtPath:docPath withIntermediateDirectories:YES attributes:nil error:nil];
 
-        // 2. CRUCIAL FOR iOS FILES APP: Write a real, non-hidden file directly into Documents/
+        // 2. Rotate previous log to log.prev.txt so crash diagnostics are NEVER lost on restart!
+        NSString *logPath = [docPath stringByAppendingPathComponent:@"log.txt"];
+        NSString *prevPath = [docPath stringByAppendingPathComponent:@"log.prev.txt"];
+        [fm removeItemAtPath:prevPath error:nil];
+        [fm moveItemAtPath:logPath toPath:prevPath error:nil];
+
+        // 3. Open log.txt with synchronous POSIX descriptor and unbuffered stdio
+        int fd = open([logPath UTF8String], O_WRONLY | O_CREAT | O_TRUNC | O_SYNC, 0666);
+        if (fd >= 0) {
+            dup2(fd, STDERR_FILENO);
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
+        freopen([logPath UTF8String], "w", stderr);
+        setvbuf(stderr, NULL, _IONBF, 0);
+        freopen([logPath UTF8String], "a", stdout);
+        setvbuf(stdout, NULL, _IONBF, 0);
+        g_own_log = true;
+
+        // 4. CRUCIAL FOR iOS FILES APP: Write README directly into Documents/
         // Apple's fileproviderd hides app containers under "On My iPad" if Documents is empty!
         NSString *readmePath = [docPath stringByAppendingPathComponent:@"README.txt"];
         NSString *readmeContent =
@@ -222,12 +245,14 @@ void plat_setup_ios_documents(void) {
             @"     • data/exefs/sdk        (if present in your dump)\n"
             @"     • data/romfs/           (all game romfs asset folders)\n\n"
             @"2. Your save files will be stored in 'save/' automatically.\n\n"
-            @"3. Game execution logs are written to 'log.txt'.\n\n"
+            @"3. Game execution logs are written to 'log.txt' (and 'log.prev.txt').\n\n"
             @"Once you place your files, return to the MHGU Recomp app!\n";
 
-        [readmeContent writeToFile:readmePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        if (![fm fileExistsAtPath:readmePath]) {
+            [readmeContent writeToFile:readmePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
 
-        // 3. Create subdirectories: data/exefs, data/romfs, save
+        // 5. Create subdirectories: data/exefs, data/romfs, save
         NSString *dataPath = [docPath stringByAppendingPathComponent:@"data"];
         NSString *exefsPath = [dataPath stringByAppendingPathComponent:@"exefs"];
         NSString *romfsPath = [dataPath stringByAppendingPathComponent:@"romfs"];
@@ -237,35 +262,36 @@ void plat_setup_ios_documents(void) {
         [fm createDirectoryAtPath:romfsPath withIntermediateDirectories:YES attributes:nil error:nil];
         [fm createDirectoryAtPath:savePath withIntermediateDirectories:YES attributes:nil error:nil];
 
-        // 4. Placeholder instruction files inside exefs and romfs
-        NSString *exefsHelp = [exefsPath stringByAppendingPathComponent:@"put_main_and_npdm_here.txt"];
-        [@"Place 'main', 'main.npdm', and 'sdk' from your Switch v1.4.0 exefs here.\n"
-            writeToFile:exefsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
-
-        NSString *romfsHelp = [romfsPath stringByAppendingPathComponent:@"put_romfs_folders_here.txt"];
-        [@"Place all folders and files from your Switch v1.4.0 romfs here.\n"
-            writeToFile:romfsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
-
-        // 5. Open stderr and stdout log in Documents/log.txt
-        static bool s_log_opened = false;
-        if (!s_log_opened) {
-            NSString *logPath = [docPath stringByAppendingPathComponent:@"log.txt"];
-            FILE *fp = freopen([logPath UTF8String], "w", stderr);
-            if (fp) {
-                setvbuf(stderr, NULL, _IONBF, 0);
-                dup2(fileno(stderr), STDOUT_FILENO);
-                setvbuf(stdout, NULL, _IONBF, 0);
-                g_own_log = true;
-                s_log_opened = true;
-            }
+        // 6. Exclude game data from device backups (Documents is backed up by default)
+        for (NSString *d in @[@"data", @"save"]) {
+            NSURL *u = [NSURL fileURLWithPath:[docPath stringByAppendingPathComponent:d]];
+            [u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
         }
 
-        // 6. Set working directory to Documents
+        // 7. Placeholder instruction files inside exefs and romfs
+        NSString *exefsHelp = [exefsPath stringByAppendingPathComponent:@"put_main_and_npdm_here.txt"];
+        if (![fm fileExistsAtPath:exefsHelp]) {
+            [@"Place 'main', 'main.npdm', and 'sdk' from your Switch v1.4.0 exefs here.\n"
+                writeToFile:exefsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+
+        NSString *romfsHelp = [romfsPath stringByAppendingPathComponent:@"put_romfs_folders_here.txt"];
+        if (![fm fileExistsAtPath:romfsHelp]) {
+            [@"Place all folders and files from your Switch v1.4.0 romfs here.\n"
+                writeToFile:romfsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+
+        // 8. Set working directory to Documents
         chdir([docPath UTF8String]);
         fprintf(stderr, "=== MHGU Recomp iOS Startup ===\n");
         fprintf(stderr, "[plat] Documents initialized at: %s\n", [docPath UTF8String]);
         fflush(stderr);
     }
+}
+
+// Early constructor so logging and filesystem setup run before UIApplicationMain
+__attribute__((constructor(101))) static void darwin_early_log_init(void) {
+    plat_setup_ios_documents();
 }
 
 @interface MHGUMissingFilesVC : UIViewController

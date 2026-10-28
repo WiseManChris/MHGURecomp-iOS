@@ -98,11 +98,19 @@ jobs:
           # Strip debug symbols to optimize size
           xcrun strip -S "$APP_DIR/MHGURecomp"
 
-          # Ad-hoc sign with extended-virtual-addressing entitlement
-          codesign --force --deep --sign - --entitlements ios/Entitlements.plist "$APP_DIR"
+          # Clear extended attributes before signing
+          xattr -cr "$APP_DIR" 2>/dev/null || true
 
-          # Verify signature and entitlements
-          codesign -dvvv --entitlements :- "$APP_DIR"
+          # Ad-hoc sign ONLY the inner executable with increased-memory-limit entitlement
+          # (Sideloaders like iloader, SideStore, and AltStore read entitlements from the binary
+          # and re-sign the whole .app bundle on-device using the user's free Apple ID certificate).
+          codesign --force --sign - --entitlements ios/Entitlements.plist "$APP_DIR/MHGURecomp"
+
+          # Verify binary signature and entitlements
+          codesign -dvvv --entitlements :- "$APP_DIR/MHGURecomp"
+
+          # Remove bundle-level _CodeSignature so sideloaders can cleanly sign on-device
+          rm -rf "$APP_DIR/_CodeSignature"
 
           # Create IPA archive
           zip -r9 MHGURecomp.ipa Payload

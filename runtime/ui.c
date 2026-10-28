@@ -35,6 +35,11 @@ static void fit_desktop(int *w, int *h) {
 // Full screen as the settings say (exclusive: the monitor mode closest to Resolution; else borderless desktop), or
 // windowed. The cursor only shows in a window.
 static void set_fullscreen(bool on) {
+#ifdef __APPLE__
+    (void)on;
+    // On iOS the SDL window fills the UIWindow/screen natively. Mode switching is not supported.
+    return;
+#else
     bool was = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN;
     if (on && !was) SDL_GetWindowSize(window, &win_w, &win_h);
     if (on && g_config.display_mode == DISPLAY_FULLSCREEN) {
@@ -59,6 +64,7 @@ static void set_fullscreen(bool on) {
         SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     }
     if (on) SDL_HideCursor(); else SDL_ShowCursor();
+#endif
 }
 
 void ui_init(void) {
@@ -79,7 +85,9 @@ void ui_init(void) {
     if (getenv("MHGU_HIDDEN")) flags |= SDL_WINDOW_HIDDEN;
     window = SDL_CreateWindow("Monster Hunter Generations Ultimate", win_w, win_h, flags);
     if (!window) FATAL("SDL_CreateWindow: %s\n", SDL_GetError());
+#ifndef __APPLE__
     if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
+#endif
 }
 
 // Alt+Enter: windowed <-> the full-screen mode of the settings (Windowed in the settings: borderless).

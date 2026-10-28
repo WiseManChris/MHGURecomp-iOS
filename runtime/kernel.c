@@ -221,9 +221,22 @@ static KThread *thread_new(uint32_t entry, uint32_t arg, uint32_t stack_top, int
 static void thread_start(KThread *t) {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
+#if defined(__APPLE__)
+    pthread_attr_setstacksize(&attr, 32ull << 20);  // 32 MB per thread to preserve iOS address space
+#else
     pthread_attr_setstacksize(&attr, 256ull << 20);  // guest recursion runs on the host stack
+#endif
     t->started = true;
-    pthread_create(&t->host, &attr, thread_main, t);
+    int rc = pthread_create(&t->host, &attr, thread_main, t);
+    if (rc != 0) {
+        // Fallback to 8 MB if 32 MB was too large for system limits
+        pthread_attr_setstacksize(&attr, 8ull << 20);
+        rc = pthread_create(&t->host, &attr, thread_main, t);
+        if (rc != 0) {
+            fprintf(stderr, "[kernel] FATAL: pthread_create failed: %s (errno %d)\n", strerror(rc), rc);
+            fflush(stderr);
+        }
+    }
     pthread_attr_destroy(&attr);
 }
 
