@@ -1678,7 +1678,7 @@ static void progcache_init(void) {
     done = true;
     if (getenv("MHGU_NO_PROGRAM_CACHE") || getenv("MHGU_SAVE_GLSL") || getenv("MHGU_SAVE_MSL") || getenv("MHGU_NO_DISCARD"))
         return;
-    CacheHeader hdr = {"MHGUPRG", sizeof(ProgRec)}, fh;
+    CacheHeader hdr = {"MHGUPR2", sizeof(ProgRec)}, fh;
     char exe[1024];
     struct stat es;
     if (!plat_exe_path(exe, sizeof exe) || stat(exe, &es)) return;
@@ -1879,7 +1879,7 @@ static void pipecache_init(const CacheHeader *hdr) {
     int n = 0;
     long good = 0;
     FILE *f = fopen(PIPECACHE_PATH, "r+b");
-    if (f && fread(&fh, sizeof fh, 1, f) == 1 && !memcmp(fh.magic, "MHGUPRG", 8) &&
+    if (f && fread(&fh, sizeof fh, 1, f) == 1 && !memcmp(fh.magic, "MHGUPR2", 8) &&
         fh.stamp == hash_words(hdr->stamp, (uint64_t[]){sizeof(PipeRec)}, 8)) {
         good = (long)sizeof fh;
         PipeRec r;

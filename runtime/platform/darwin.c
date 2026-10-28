@@ -278,6 +278,15 @@ void plat_setup_ios_documents(void) {
                 writeToFile:romfsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
         }
 
+        // Clean out any stale pre-Metal-shader-fix caches so shaders retranslate with mhgu_ helpers
+        NSString *cachePath = [docPath stringByAppendingPathComponent:@"cache"];
+        NSString *cacheTag = [cachePath stringByAppendingPathComponent:@"mhgu_msl_v1.tag"];
+        if (![fm fileExistsAtPath:cacheTag]) {
+            [fm removeItemAtPath:cachePath error:nil];
+            [fm createDirectoryAtPath:cachePath withIntermediateDirectories:YES attributes:nil error:nil];
+            [@"v1" writeToFile:cacheTag atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+
         // 8. Set working directory to Documents
         chdir([docPath UTF8String]);
         fprintf(stderr, "=== MHGU Recomp iOS Startup ===\n");

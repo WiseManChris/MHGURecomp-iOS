@@ -185,7 +185,7 @@ static const char *fneg_abs(const char *e, bool neg, bool abs_, char *buf) {
 #define NA(e, n, a) fneg_abs((e), (n), (a), alloca(600))
 
 static const char *fresult(const char *e, bool sat, char *buf) {
-    if (sat) sprintf(buf, "as_type<uint>(saturate(%s))", e);
+    if (sat) sprintf(buf, "as_type<uint>(mhgu_saturate(%s))", e);
     else sprintf(buf, "as_type<uint>(%s)", e);
     return buf;
 }
@@ -317,7 +317,7 @@ static const char *hsrc(Ctx *c, const char *v, int swz, bool neg, bool abs_, cha
 
 static void hstore(Ctx *c, int d, const char *expr, int merge, bool sat) {
     char t[2048], e[1700];
-    if (sat) sprintf(e, "saturate(%s)", expr); else strcpy(e, expr);
+    if (sat) sprintf(e, "mhgu_saturate(%s)", expr); else strcpy(e, expr);
     if (d == RZ) return;
     c->reg_used[d] = 1;
     sprintf(t, "hpack(%s, %du, r%d)", e, merge, d);
@@ -916,7 +916,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         c->ipa_mul = (int)bits(w, 20, 8);
         attr_load(c, d, addr, NULL);
         c->ipa_mode = -1;
-        if (bits(w, 51, 1) && d != RZ) sp(&c->body, "    r%d = as_type<uint>(saturate(as_type<float>(r%d)));\n", d, d);
+        if (bits(w, 51, 1) && d != RZ) sp(&c->body, "    r%d = as_type<uint>(mhgu_saturate(as_type<float>(r%d)));\n", d, d);
     } else if (OPM(0xefd8000000000000ull, 0xfff8000000000000ull)) {  // LD attribute
         int n = 1 + (int)bits(w, 47, 2);
         uint32_t addr = (uint32_t)bits(w, 20, 10);
@@ -1033,7 +1033,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0x5c60000000000000ull, 0xfff8000000000000ull) || OPM(0x4c60000000000000ull, 0xfff8000000000000ull) ||
                OPM(0x3860000000000000ull, 0xfef8000000000000ull)) {  // FMNMX
         const char *x = NA(F(R(a)), bits(w, 48, 1), bits(w, 46, 1)), *y = NA(F(B(true)), bits(w, 45, 1), bits(w, 49, 1));
-        sprintf(t, "(%s ? fmin(%s, %s) : fmax(%s, %s))", P((int)bits(w, 39, 3), bits(w, 42, 1)), x, y, x, y);
+        sprintf(t, "(%s ? mhgu_fmin(%s, %s) : mhgu_fmax(%s, %s))", P((int)bits(w, 39, 3), bits(w, 42, 1)), x, y, x, y);
         set_reg(c, d, FRES(t, false));
     } else if (OPM(0x5bb0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bb0000000000000ull, 0xfff0000000000000ull) ||
                OPM(0x36b0000000000000ull, 0xfef0000000000000ull)) {  // FSETP
@@ -1134,7 +1134,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (dfmt == 1) {  // F16 result in the low half, high half zero
             char h[1100];
             snprintf(h, sizeof h, c->glsl ? "(packHalf2x16(vec2(%s, 0.0f)))" : "(uint(as_type<ushort>(half(%s))))",
-                     bits(w, 50, 1) ? (sprintf(u, "saturate(%s)", t), u) : t);
+                     bits(w, 50, 1) ? (sprintf(u, "mhgu_saturate(%s)", t), u) : t);
             set_reg(c, d, h);
         } else {
             set_reg(c, d, FRES(t, bits(w, 50, 1)));
@@ -1367,15 +1367,15 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0x5c30000000000000ull, 0xfff8000000000000ull) || OPM(0x4c30000000000000ull, 0xfff8000000000000ull) ||
                OPM(0x3830000000000000ull, 0xfef8000000000000ull)) {  // FLO
         const char *bv = B(false);
-        sprintf(t, bits(w, 48, 1) ? "(int(%s) < 0 ? (31u - clz(~%s)) : (31u - clz(%s)))" : "(31u - clz(%s))", bv, bv, bv);
+        sprintf(t, bits(w, 48, 1) ? "(int(%s) < 0 ? (31u - mhgu_clz(~%s)) : (31u - mhgu_clz(%s)))" : "(31u - mhgu_clz(%s))", bv, bv, bv);
         set_reg(c, d, t);
     } else if (OPM(0x5c08000000000000ull, 0xfff8000000000000ull) || OPM(0x4c08000000000000ull, 0xfff8000000000000ull) ||
                OPM(0x3808000000000000ull, 0xfef8000000000000ull)) {  // POPC
-        sprintf(t, bits(w, 40, 1) ? "popcount(~%s)" : "popcount(%s)", B(false));
+        sprintf(t, bits(w, 40, 1) ? "mhgu_popcount(~%s)" : "mhgu_popcount(%s)", B(false));
         set_reg(c, d, t);
     } else if (OPM(0x5c38000000000000ull, 0xfff8000000000000ull) || OPM(0x4c38000000000000ull, 0xfff8000000000000ull) ||
                OPM(0x3838000000000000ull, 0xfef8000000000000ull)) {  // IMUL
-        if (bits(w, 39, 1)) sprintf(t, bits(w, 40, 1) ? "uint(mulhi(int(%s), int(%s)))" : "mulhi(%s, %s)", R(a), B(false));
+        if (bits(w, 39, 1)) sprintf(t, bits(w, 40, 1) ? "uint(mhgu_mulhi(int(%s), int(%s)))" : "mhgu_mulhi(%s, %s)", R(a), B(false));
         else sprintf(t, "(%s * %s)", R(a), B(false));
         set_reg(c, d, t);
     } else if (OPM(0x1f00000000000000ull, 0xff00000000000000ull)) {  // IMUL32I
@@ -1767,14 +1767,14 @@ static const char glsl_prelude[] =
     "int sx16(uint v) { return bitfieldExtract(int(v), 0, 16); }\n"
     "int sx16(int v) { return bitfieldExtract(v, 0, 16); }\n"
     // MSL semantics: saturate(NaN) = 0, fmin/fmax return the non-NaN operand
-    "float saturate(float x) { return isnan(x) ? 0.0f : clamp(x, 0.0f, 1.0f); }\n"
-    "vec2 saturate(vec2 x) { return vec2(saturate(x.x), saturate(x.y)); }\n"
-    "float fmin(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : min(a, b)); }\n"
-    "float fmax(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : max(a, b)); }\n"
-    "uint clz(uint v) { return v == 0u ? 32u : uint(31 - findMSB(v)); }\n"
-    "uint popcount(uint v) { return uint(bitCount(v)); }\n"
-    "uint mulhi(uint a, uint b) { uint hi, lo; umulExtended(a, b, hi, lo); return hi; }\n"
-    "int mulhi(int a, int b) { int hi, lo; imulExtended(a, b, hi, lo); return hi; }\n"
+    "float mhgu_saturate(float x) { return isnan(x) ? 0.0f : clamp(x, 0.0f, 1.0f); }\n"
+    "vec2 mhgu_saturate(vec2 x) { return vec2(mhgu_saturate(x.x), mhgu_saturate(x.y)); }\n"
+    "float mhgu_fmin(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : min(a, b)); }\n"
+    "float mhgu_fmax(float a, float b) { return isnan(a) ? b : (isnan(b) ? a : max(a, b)); }\n"
+    "uint mhgu_clz(uint v) { return v == 0u ? 32u : uint(31 - findMSB(v)); }\n"
+    "uint mhgu_popcount(uint v) { return uint(bitCount(v)); }\n"
+    "uint mhgu_mulhi(uint a, uint b) { uint hi, lo; umulExtended(a, b, hi, lo); return hi; }\n"
+    "int mhgu_mulhi(int a, int b) { int hi, lo; imulExtended(a, b, hi, lo); return hi; }\n"
     "uint bfe_u(uint v, uint ctl) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u) return 0u; if (pos >= 32u) return 0u; return bitfieldExtract(v, int(pos), int(min(len, 32u - pos))); }\n"
     "uint bfe_s(uint v, uint ctl) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u) return 0u; if (pos >= 32u) return (int(v) < 0) ? 0xFFFFFFFFu : 0u; return uint(bitfieldExtract(int(v), int(pos), int(min(len, 32u - pos)))); }\n"
     "uint bfi(uint ins, uint ctl, uint base) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u || pos >= 32u) return base; return bitfieldInsert(base, ins, int(pos), int(min(len, 32u - pos))); }\n"
