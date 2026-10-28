@@ -258,6 +258,7 @@ typedef struct {
     bool video;
     bool started;
     bool stopped;
+    bool eos_emitted;
 } StubDecoder;
 
 #define MAX_STUB_DECODERS 64
@@ -268,6 +269,13 @@ static void stub_dec_configure(Cpu *c) {
     uint32_t h = LD32(ARG(0) + 4);
     if (h > 0 && h <= MAX_STUB_DECODERS) {
         StubDecoder *d = &g_stub_decoders[h - 1];
+        MediaData *m = md(ARG(1));
+        MdEntry *mime = md_find(m, "mime", true);
+        if (mime && mime->sval && strstr(mime->sval, "video")) {
+            d->video = true;
+        } else if (mime && mime->sval && strstr(mime->sval, "audio")) {
+            d->video = false;
+        }
         LOG("[movie] Decoder::Configure (%s)\n", d->video ? "video" : "audio");
     }
     RET(0);
@@ -291,7 +299,11 @@ static void stub_dec_format_fill(StubDecoder *d, MediaData *m) {
         md_set_int(m, "width", 1920);
         md_set_int(m, "height", 1080);
         md_set_int(m, "stride", 1920);
+        md_set_int(m, "slice-height", 1080);
         md_set_int(m, "color-format", 21); // NV12
+        md_set_int(m, "nv12-y-stride", 1920);
+        md_set_int(m, "nv12-y-offset", 0);
+        md_set_int(m, "nv12-uv-offset", 1920 * 1080);
     } else {
         md_set_str(m, "mime", "audio/raw");
         md_set_int(m, "sample-rate", 48000);
@@ -312,6 +324,7 @@ static void stub_dec_start(Cpu *c) {
     if (h > 0 && h <= MAX_STUB_DECODERS) {
         StubDecoder *d = &g_stub_decoders[h - 1];
         d->started = true;
+        d->eos_emitted = false;
         LOG("[movie] Decoder::Start (%s) -> signalling format changed + buffers ready\n", d->video ? "video" : "audio");
         // Event 2 = Format changed
         if (d->events[2]) stub_guest_event_op(c, d->events[2], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
@@ -359,23 +372,25 @@ static void stub_dec_send_input(Cpu *c) {
     if (h > 0 && h <= MAX_STUB_DECODERS) {
         StubDecoder *d = &g_stub_decoders[h - 1];
         if (d->events[0]) stub_guest_event_op(c, d->events[0], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
-        if (d->events[1]) stub_guest_event_op(c, d->events[1], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+        if (d->events[1] && !d->eos_emitted) stub_guest_event_op(c, d->events[1], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
     }
     RET(0);
 }
 
 static void stub_dec_acquire_output(Cpu *c) {
+    uint32_t h = LD32(ARG(0) + 4);
+    StubDecoder *d = (h > 0 && h <= MAX_STUB_DECODERS) ? &g_stub_decoders[h - 1] : NULL;
+    if (!d || d->eos_emitted) {
+        RET(MOVIE_ERR);
+        return;
+    }
+    d->eos_emitted = true;
     if (ARG(1)) ST32(ARG(1), 0);
     if (ARG(2)) { ST32(ARG(2), 0); ST32(ARG(2) + 4, 0); }
     if (ARG(3)) ST32(ARG(3), MOVIE_EOS); // Signal MOVIE_EOS (4) so movie player exits!
     if (STK(0)) ST32(STK(0), 0);
-    uint32_t h = LD32(ARG(0) + 4);
-    if (h > 0 && h <= MAX_STUB_DECODERS) {
-        StubDecoder *d = &g_stub_decoders[h - 1];
-        LOG("[movie] Decoder::AcquireOutputBuffer (%s) -> MOVIE_EOS (finishing movie playback)\n",
-            d->video ? "video" : "audio");
-        if (d->events[1]) stub_guest_event_op(c, d->events[1], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
-    }
+    LOG("[movie] Decoder::AcquireOutputBuffer (%s) -> MOVIE_EOS (finishing movie playback)\n",
+        d->video ? "video" : "audio");
     RET(0);
 }
 

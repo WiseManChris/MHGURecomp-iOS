@@ -763,14 +763,8 @@ static void *dump_threads(void *arg) {
     int secs = (int)(intptr_t)arg;
     for (;;) {
         plat_sleep_until_ns(plat_now_ns() + (uint64_t)secs * 1000000000ull);
-        secs = 3;
+        secs = 5;
         static const char *const kinds[] = {"running", "mutex", "condvar", "arbiter"};
-        static int movie_hang_dumps = 0;
-        static int main_hang_dumps = 0;
-        bool movie_thread_waiting = false;
-        bool main_movie_waiting = false;
-        KThread *movie_thread = NULL;
-        KThread *main_thread = NULL;
 
         pthread_mutex_lock(&g_klock);
         LOG("[threads] ---- dump\n");
@@ -795,76 +789,12 @@ static void *dump_threads(void *arg) {
                     if ((ins & 0x0F000000u) != 0x0B000000u && (ins & 0xFE000000u) != 0xFA000000u &&
                         (ins & 0x0FFFFFF0u) != 0x012FFF30u)
                         continue;
-                    if (v == 0xdbd994u) {
-                        movie_thread_waiting = true;
-                        movie_thread = t;
-                    }
-                    if (v == 0xdbe7d8u) {
-                        main_movie_waiting = true;
-                        main_thread = t;
-                    }
                     n += snprintf(line + n, sizeof line - n, " %x", v);
                     k++;
                 }
                 LOG("[threads]     callers:%s\n", line);
             }
         }
-
-        // 1. If Main Thread is waiting at dbe7d8 on obj + 0x1e0 for the movie to finish:
-        if (main_movie_waiting && main_thread && main_thread->wait_kind == WAIT_CONDVAR && main_thread->wait_addr >= 0x10000000) {
-            main_hang_dumps++;
-            if (main_hang_dumps >= 2) {
-                uint32_t cv_addr = main_thread->wait_addr;
-                uint32_t event_2 = cv_addr - 0x18;
-                uint32_t obj = event_2 - 0x1e0;
-                uint32_t stop_flag = obj + 0x202;
-                LOG("[watchdog] Main thread waiting for movie finish at dbe7d8 (dumps=%d, obj=%x, cv=%x)! Releasing...\n",
-                    main_hang_dumps, obj, cv_addr);
-                if (kernel_mapped_locked(stop_flag, 1)) {
-                    *(uint8_t *)G2H(stop_flag) = 1;
-                }
-                if (kernel_mapped_locked(event_2, 32)) {
-                    *(uint8_t *)G2H(event_2 + 8) = 1;
-                }
-                signal_process_wide_key_locked(cv_addr, -1);
-                signal_process_wide_key_locked(event_2, -1);
-                main_hang_dumps = 0;
-            }
-        } else {
-            main_hang_dumps = 0;
-        }
-
-        // 2. If Movie Worker Thread is hung in playback loop (0xdbd994) AFTER movie playback was actually started:
-        extern bool g_movie_active;
-        if (g_movie_active && movie_thread_waiting && movie_thread && movie_thread->wait_kind == WAIT_CONDVAR && movie_thread->wait_addr >= 0x10000000) {
-            movie_hang_dumps++;
-            if (movie_hang_dumps >= 4) {
-                uint32_t cv_addr = movie_thread->wait_addr;
-                uint32_t event_1 = cv_addr - 0x18;
-                uint32_t obj = event_1 - 0x1c4;
-                uint32_t event_2 = obj + 0x1e0;
-                uint32_t stop_flag = obj + 0x202;
-                LOG("[watchdog] Movie playback hang detected on thread %llu (dumps=%d, obj=%x, cv=%x)! Forcing EOS...\n",
-                    (unsigned long long)movie_thread->id, movie_hang_dumps, obj, cv_addr);
-                if (kernel_mapped_locked(stop_flag, 1)) {
-                    *(uint8_t *)G2H(stop_flag) = 1;
-                }
-                if (kernel_mapped_locked(event_1, 32)) {
-                    *(uint8_t *)G2H(event_1 + 8) = 1;
-                }
-                if (kernel_mapped_locked(event_2, 32)) {
-                    *(uint8_t *)G2H(event_2 + 8) = 1;
-                }
-                signal_process_wide_key_locked(cv_addr, -1);
-                signal_process_wide_key_locked(event_2 + 0x18, -1);
-                signal_process_wide_key_locked(event_1, -1);
-                signal_process_wide_key_locked(event_2, -1);
-                movie_hang_dumps = 0;
-            }
-        } else {
-            movie_hang_dumps = 0;
-        }
-
         pthread_mutex_unlock(&g_klock);
     }
     return NULL;
