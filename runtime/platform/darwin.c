@@ -242,31 +242,38 @@ void plat_setup_ios_documents(void) {
             @"     • data/exefs/main.npdm  (game metadata)\n"
             @"     • data/exefs/sdk        (if present in your dump)\n"
             @"     • data/romfs/           (all game romfs asset folders)\n\n"
-            @"2. Your save files will be stored in 'save/' automatically.\n\n"
-            @"3. Game execution logs are written to 'log.txt' (and 'log.prev.txt').\n\n"
+            @"2. MODS & HD TEXTURES:\n"
+            @"   Place mod folders in 'mods/' (e.g. mods/MHGU-HD-Project/romfs/nativeNX/...).\n"
+            @"   Both RomFS mods and Atmosphere mod folders are supported!\n\n"
+            @"3. Your save files will be stored in 'save/' automatically.\n\n"
+            @"4. Game execution logs are written to 'log.txt' (and 'log.prev.txt').\n\n"
             @"Once you place your files, return to the MHGU Recomp app!\n";
 
         if (![fm fileExistsAtPath:readmePath]) {
             [readmeContent writeToFile:readmePath atomically:YES encoding:NSUTF8StringEncoding error:nil];
         }
 
-        // 5. Create subdirectories: data/exefs, data/romfs, save
+        // 5. Create subdirectories: data/exefs, data/romfs, save, mods, cheats
         NSString *dataPath = [docPath stringByAppendingPathComponent:@"data"];
         NSString *exefsPath = [dataPath stringByAppendingPathComponent:@"exefs"];
         NSString *romfsPath = [dataPath stringByAppendingPathComponent:@"romfs"];
         NSString *savePath = [docPath stringByAppendingPathComponent:@"save"];
+        NSString *modsPath = [docPath stringByAppendingPathComponent:@"mods"];
+        NSString *cheatsPath = [docPath stringByAppendingPathComponent:@"cheats"];
 
         [fm createDirectoryAtPath:exefsPath withIntermediateDirectories:YES attributes:nil error:nil];
         [fm createDirectoryAtPath:romfsPath withIntermediateDirectories:YES attributes:nil error:nil];
         [fm createDirectoryAtPath:savePath withIntermediateDirectories:YES attributes:nil error:nil];
+        [fm createDirectoryAtPath:modsPath withIntermediateDirectories:YES attributes:nil error:nil];
+        [fm createDirectoryAtPath:cheatsPath withIntermediateDirectories:YES attributes:nil error:nil];
 
-        // 6. Exclude game data from device backups (Documents is backed up by default)
-        for (NSString *d in @[@"data", @"save"]) {
+        // 6. Exclude game data and mods from device backups (Documents is backed up by default)
+        for (NSString *d in @[@"data", @"save", @"mods", @"cheats"]) {
             NSURL *u = [NSURL fileURLWithPath:[docPath stringByAppendingPathComponent:d]];
             [u setResourceValue:@YES forKey:NSURLIsExcludedFromBackupKey error:nil];
         }
 
-        // 7. Placeholder instruction files inside exefs and romfs
+        // 7. Placeholder instruction files inside exefs, romfs, and mods
         NSString *exefsHelp = [exefsPath stringByAppendingPathComponent:@"put_main_and_npdm_here.txt"];
         if (![fm fileExistsAtPath:exefsHelp]) {
             [@"Place 'main', 'main.npdm', and 'sdk' from your Switch v1.4.0 exefs here.\n"
@@ -279,6 +286,20 @@ void plat_setup_ios_documents(void) {
                 writeToFile:romfsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
         }
 
+        NSString *modsHelp = [modsPath stringByAppendingPathComponent:@"README_MODS.txt"];
+        if (![fm fileExistsAtPath:modsHelp]) {
+            [@"======================================================\n"
+             @" Monster Hunter Generations Ultimate - Mod Directory\n"
+             @"======================================================\n\n"
+             @"Install mods by placing each mod in its own folder here:\n"
+             @"  mods/MHGU-HD-Project/romfs/nativeNX/arc/...\n"
+             @"  or mods/MHGU-HD-Project/nativeNX/arc/...\n"
+             @"  or mods/MHGU-HD-Project/arc/...\n\n"
+             @"Atmosphere Switch mod folders (atmosphere/contents/...) are also supported.\n"
+             @"To disable a mod, prefix its folder name with '_' (e.g. _MHGU-HD-Project).\n"
+                writeToFile:modsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+
         // Clean out any stale pre-Metal-shader-fix caches so shaders retranslate with mhgu_ helpers
         NSString *cachePath = [docPath stringByAppendingPathComponent:@"cache"];
         NSString *cacheTag = [cachePath stringByAppendingPathComponent:@"mhgu_msl_v1.tag"];
@@ -288,10 +309,12 @@ void plat_setup_ios_documents(void) {
             [@"v1" writeToFile:cacheTag atomically:YES encoding:NSUTF8StringEncoding error:nil];
         }
 
-        // 8. Set working directory to Documents
+        // 8. Set working directory to Documents and export environment variables
         chdir([docPath UTF8String]);
         setenv("MHGU_LOG_FILES", "1", 0);
         setenv("MHGU_MOVIE_TRACE", "1", 0);
+        setenv("MHGU_MODS_DIR", [modsPath UTF8String], 1);
+        setenv("MHGU_CHEATS_DIR", [cheatsPath UTF8String], 1);
         fprintf(stderr, "=== MHGU Recomp iOS Startup ===\n");
         fprintf(stderr, "[plat] Documents initialized at: %s\n", [docPath UTF8String]);
         fflush(stderr);

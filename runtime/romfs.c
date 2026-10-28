@@ -170,11 +170,42 @@ static char *rel_path(File *f) {
 bool romfs_open(const char *base_dir, const char *const *overlays, int noverlays) {
     Dir *root = scan(base_dir, "", 0);
     if (!root) { LOG("[romfs] cannot read %s\n", base_dir); return false; }
+
+    // Locate the game's canonical nativeNX directory in root
+    Dir *native_nx = NULL;
+    for (int i = 0; i < root->ndirs; i++) {
+        if (!strcasecmp(root->dirs[i]->name, "nativeNX")) {
+            native_nx = root->dirs[i];
+            break;
+        }
+    }
+
     for (int i = 0; i < noverlays; i++) {
         Dir *o = scan(overlays[i], "", 0);
-        if (!o) continue;
-        int n = merge(root, o);
-        LOG("[romfs] mod %s: %d files\n", overlays[i], n);
+        if (!o) {
+            LOG("[romfs] cannot read overlay %s\n", overlays[i]);
+            continue;
+        }
+
+        // Check if `o` has a top-level nativeNX directory
+        bool has_native_nx = false;
+        for (int d = 0; d < o->ndirs; d++) {
+            if (!strcasecmp(o->dirs[d]->name, "nativeNX")) {
+                has_native_nx = true;
+                break;
+            }
+        }
+
+        int n = 0;
+        if (has_native_nx || !native_nx) {
+            n = merge(root, o);
+        } else {
+            // Mod contains loose nativeNX folders/files (arc/, sound/, movie/, resident.arc, etc.)
+            // Merge directly into nativeNX so the game finds them under nativeNX/...!
+            n = merge(native_nx, o);
+        }
+        LOG("[romfs] mod %s: %d files merged into RomFS (target: %s)\n",
+            overlays[i], n, (has_native_nx || !native_nx) ? "root" : "nativeNX");
     }
     sort_tree(root);
     Lists l = {0};

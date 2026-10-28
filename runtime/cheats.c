@@ -50,8 +50,27 @@ static uint64_t keys;
 static const Cheat *cur;  // the one running (for the log)
 
 const char *cheats_dir(void) {
+    static char s_dir[1024];
+    if (s_dir[0]) return s_dir;
+
     const char *e = getenv("MHGU_CHEATS_DIR");
-    return e && *e ? e : "cheats";
+    struct stat st;
+    if (e && *e && !stat(e, &st) && S_ISDIR(st.st_mode)) {
+        snprintf(s_dir, sizeof s_dir, "%s", e);
+        return s_dir;
+    }
+    const char *candidates[] = {
+        "cheats", "Cheats", "CHEATS",
+        "data/cheats", "data/Cheats"
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        if (!stat(candidates[i], &st) && S_ISDIR(st.st_mode)) {
+            snprintf(s_dir, sizeof s_dir, "%s", candidates[i]);
+            return s_dir;
+        }
+    }
+    snprintf(s_dir, sizeof s_dir, "%s", e && *e ? e : "cheats");
+    return s_dir;
 }
 
 void cheats_make_dir(void) {

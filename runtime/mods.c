@@ -16,12 +16,31 @@ static bool is_dir(const char *p) {
 }
 
 const char *mods_dir(void) {
+    static char s_dir[1024];
+    if (s_dir[0]) return s_dir;
+
     const char *e = getenv("MHGU_MODS_DIR");
-    return e && *e ? e : "mods";
+    if (e && *e && is_dir(e)) {
+        snprintf(s_dir, sizeof s_dir, "%s", e);
+        return s_dir;
+    }
+    const char *candidates[] = {
+        "mods", "Mods", "MODS",
+        "data/mods", "data/Mods", "data/MODS"
+    };
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+        if (is_dir(candidates[i])) {
+            snprintf(s_dir, sizeof s_dir, "%s", candidates[i]);
+            return s_dir;
+        }
+    }
+    snprintf(s_dir, sizeof s_dir, "%s", e && *e ? e : "mods");
+    return s_dir;
 }
 
 void mods_make_dir(void) {
-    if (!is_dir(mods_dir())) mkdir(mods_dir(), 0755);
+    const char *d = mods_dir();
+    if (!is_dir(d)) mkdir(d, 0755);
 }
 
 static int cmp(const void *a, const void *b) { return strcasecmp(*(char *const *)a, *(char *const *)b); }
@@ -30,11 +49,53 @@ static int cmp(const void *a, const void *b) { return strcasecmp(*(char *const *
 static char *g_names[MAX_MODS];
 static int g_nmods = -1;
 
+static void add_mod_name(const char *name) {
+    if (!name || !*name) return;
+    for (int i = 0; i < g_nmods; i++) {
+        if (!strcasecmp(g_names[i], name)) return;
+    }
+    if (g_nmods < MAX_MODS) {
+        g_names[g_nmods++] = strdup(name);
+    }
+}
+
+static bool has_child_ci(const char *parent, const char *want) {
+    DIR *d = opendir(parent);
+    if (!d) return false;
+    struct dirent *e;
+    bool found = false;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        if (!strcasecmp(e->d_name, want)) {
+            char p[1100];
+            snprintf(p, sizeof p, "%s/%s", parent, e->d_name);
+            if (is_dir(p)) { found = true; break; }
+        }
+    }
+    closedir(d);
+    return found;
+}
+
+static void scan_dir_for_mods(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while (g_nmods < MAX_MODS && (e = readdir(d))) {
+        if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+        char p[1100];
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (is_dir(p)) add_mod_name(e->d_name);
+    }
+    closedir(d);
+}
+
 static void list_mods(void) {
     if (g_nmods >= 0) return;
     g_nmods = 0;
+    const char *mdir = mods_dir();
+
     char path[1100];
-    snprintf(path, sizeof path, "%s/load_order.txt", mods_dir());
+    snprintf(path, sizeof path, "%s/load_order.txt", mdir);
     FILE *f = fopen(path, "r");
     if (f) {
         char line[512];
@@ -43,22 +104,43 @@ static void list_mods(void) {
             char *s = line;
             while (*s == ' ' || *s == '\t') s++;
             if (!*s || *s == '#') continue;
-            g_names[g_nmods++] = strdup(s);
+            add_mod_name(s);
         }
         fclose(f);
         LOG("[mods] %d mod(s) listed in %s\n", g_nmods, path);
         return;
     }
-    DIR *d = opendir(mods_dir());
-    if (!d) return;
-    struct dirent *e;
-    while (g_nmods < MAX_MODS && (e = readdir(d))) {
-        if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
-        snprintf(path, sizeof path, "%s/%s", mods_dir(), e->d_name);
-        if (is_dir(path)) g_names[g_nmods++] = strdup(e->d_name);
+
+    // Check if mdir itself directly contains romfs, nativeNX, or arc (user unzipped directly into mods/)
+    if (has_child_ci(mdir, "romfs") || has_child_ci(mdir, "nativeNX") || has_child_ci(mdir, "arc")) {
+        add_mod_name(".");
     }
-    closedir(d);
+
+    // Scan the active mods directory
+    scan_dir_for_mods(mdir);
+
+    // If data/mods exists and is distinct from mdir, scan it too
+    if (strcasecmp(mdir, "data/mods") && is_dir("data/mods")) {
+        scan_dir_for_mods("data/mods");
+    }
+
+    // Support Atmosphere Switch CFW layout: atmosphere/contents/<title_id>/romfs
+    if (is_dir("atmosphere/contents")) {
+        DIR *d = opendir("atmosphere/contents");
+        if (d) {
+            struct dirent *e;
+            while ((e = readdir(d))) {
+                if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+                char p[1100];
+                snprintf(p, sizeof p, "atmosphere/contents/%s", e->d_name);
+                if (is_dir(p)) add_mod_name(p);
+            }
+            closedir(d);
+        }
+    }
+
     qsort(g_names, g_nmods, sizeof *g_names, cmp);
+    LOG("[mods] discovered %d mod(s) across '%s'\n", g_nmods, mdir);
 }
 
 // The folder named `want` (any case) in dir or up to `depth` levels below it (shallowest first), into out.
@@ -97,18 +179,49 @@ static bool find_dir(const char *dir, const char *want, int depth, char *out, si
 int mods_romfs_layers(const char **out, int max) {
     list_mods();
     int k = 0;
+    const char *mdir = mods_dir();
     for (int i = 0; i < g_nmods && k < max; i++) {
         char mod[1100], path[1100];
-        snprintf(mod, sizeof mod, "%s/%s", mods_dir(), g_names[i]);
-        if (!is_dir(mod)) { LOG("[mods] %s: no such folder in %s\n", g_names[i], mods_dir()); continue; }
-        bool found = find_dir(mod, "romfs", 3, path, sizeof path);
-        if (!found && find_dir(mod, "nativeNX", 3, path, sizeof path)) {  // the files without their romfs/ folder
-            *strrchr(path, '/') = 0;
+        if (!strcmp(g_names[i], ".")) {
+            snprintf(mod, sizeof mod, "%s", mdir);
+        } else if (g_names[i][0] == '/' || !strncmp(g_names[i], "atmosphere/", 11) || !strncmp(g_names[i], "data/", 5)) {
+            snprintf(mod, sizeof mod, "%s", g_names[i]);
+        } else {
+            snprintf(mod, sizeof mod, "%s/%s", mdir, g_names[i]);
+            if (!is_dir(mod)) {
+                snprintf(mod, sizeof mod, "data/mods/%s", g_names[i]);
+                if (!is_dir(mod)) {
+                    LOG("[mods] %s: no such directory\n", g_names[i]);
+                    continue;
+                }
+            }
+        }
+        if (!is_dir(mod)) continue;
+
+        bool found = false;
+
+        // 1. Search for a 'romfs' directory (depth up to 8 for Atmosphere / Ryujinx / standard mod packages)
+        if (find_dir(mod, "romfs", 8, path, sizeof path)) {
             found = true;
         }
-        if (!found) continue;
+        // 2. Search for a 'nativeNX' directory (depth up to 8)
+        else if (find_dir(mod, "nativeNX", 8, path, sizeof path)) {
+            found = true;
+        }
+        // 3. Search for an 'arc' directory (depth up to 8: texture/model/UI mods without wrapper)
+        else if (find_dir(mod, "arc", 8, path, sizeof path)) {
+            char *slash = strrchr(path, '/');
+            if (slash) *slash = 0;
+            found = true;
+        }
+
+        if (!found) {
+            LOG("[mods] %s: no romfs, nativeNX, or arc folder found (skipping)\n", g_names[i]);
+            continue;
+        }
+
         out[k++] = strdup(path);
-        LOG("[mods] %s: romfs %s\n", g_names[i], path);
+        LOG("[mods] [%d] %s: active romfs layer -> %s\n", k, g_names[i], path);
     }
     return k;
 }
@@ -244,10 +357,21 @@ static void ips(Apply *a, const char *path) {
 
 void mods_patch_module(Module *m, const uint8_t build_id[32]) {
     list_mods();
+    const char *mdir = mods_dir();
     for (int i = 0; i < g_nmods; i++) {
         char mod[1100], ex[1100];
-        snprintf(mod, sizeof mod, "%s/%s", mods_dir(), g_names[i]);
-        if (!find_dir(mod, "exefs", 3, ex, sizeof ex)) continue;
+        if (!strcmp(g_names[i], ".")) {
+            snprintf(mod, sizeof mod, "%s", mdir);
+        } else if (g_names[i][0] == '/' || !strncmp(g_names[i], "atmosphere/", 11) || !strncmp(g_names[i], "data/", 5)) {
+            snprintf(mod, sizeof mod, "%s", g_names[i]);
+        } else {
+            snprintf(mod, sizeof mod, "%s/%s", mdir, g_names[i]);
+            if (!is_dir(mod)) {
+                snprintf(mod, sizeof mod, "data/mods/%s", g_names[i]);
+                if (!is_dir(mod)) continue;
+            }
+        }
+        if (!find_dir(mod, "exefs", 8, ex, sizeof ex)) continue;
         DIR *d = opendir(ex);
         if (!d) continue;
         struct dirent *e;
