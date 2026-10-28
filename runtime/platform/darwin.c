@@ -552,6 +552,8 @@ bool plat_user_dir(char *buf, size_t size) {
     return true;
 }
 
+SDL_Window *ui_window(void);
+
 void plat_error_box(const char *msg) {
     fprintf(stderr, "\n*** %s\n", msg);
     fflush(stderr);
