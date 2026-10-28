@@ -291,12 +291,16 @@ void plat_setup_ios_documents(void) {
             [@"======================================================\n"
              @" Monster Hunter Generations Ultimate - Mod Directory\n"
              @"======================================================\n\n"
-             @"Install mods by placing each mod in its own folder here:\n"
-             @"  mods/MHGU-HD-Project/romfs/nativeNX/arc/...\n"
-             @"  or mods/MHGU-HD-Project/nativeNX/arc/...\n"
-             @"  or mods/MHGU-HD-Project/arc/...\n\n"
-             @"Atmosphere Switch mod folders (atmosphere/contents/...) are also supported.\n"
-             @"To disable a mod, prefix its folder name with '_' (e.g. _MHGU-HD-Project).\n"
+             @"Just drop your mod folders here in 'mods/'!\n\n"
+             @"Examples:\n"
+             @"  mods/FF_Damage_Numbers/\n"
+             @"  mods/Key_Quest_Markers/\n"
+             @"  mods/MHGU-HD-Project/\n\n"
+             @"Everything is auto-detected:\n"
+             @"• Forge Plugins (.nro) - floating damage numbers, quest markers, HUD mods\n"
+             @"• RomFS Mods - HD textures, models, UI packs, sound mods\n"
+             @"• ExeFS Patches (.ips / .pchtxt) - 60fps patches, aspect ratio, FOV\n\n"
+             @"To temporarily disable any mod, prefix its folder name with '_' (e.g. _Key_Quest_Markers).\n"
                 writeToFile:modsHelp atomically:YES encoding:NSUTF8StringEncoding error:nil];
         }
 
@@ -858,6 +862,8 @@ static void fault_handler(int sig, siginfo_t *si, void *uc) {
     rt_fault_report(what, fa, pc, lr);
     _exit(139);
 }
+
+void (*plat_touch_hook)(uint64_t guest_addr, int write) = NULL;
 
 void plat_crash_handler_install(void) {
     static char altstack[256 * 1024] __attribute__((aligned(16)));

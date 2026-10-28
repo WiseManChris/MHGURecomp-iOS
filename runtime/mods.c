@@ -111,8 +111,8 @@ static void list_mods(void) {
         return;
     }
 
-    // Check if mdir itself directly contains romfs, nativeNX, or arc (user unzipped directly into mods/)
-    if (has_child_ci(mdir, "romfs") || has_child_ci(mdir, "nativeNX") || has_child_ci(mdir, "arc")) {
+    // Check if mdir itself directly contains romfs, nativeNX, arc, or plugins (user unzipped directly into mods/)
+    if (has_child_ci(mdir, "romfs") || has_child_ci(mdir, "nativeNX") || has_child_ci(mdir, "arc") || has_child_ci(mdir, "plugins")) {
         add_mod_name(".");
     }
 
@@ -204,8 +204,10 @@ int mods_romfs_layers(const char **out, int max) {
         if (find_dir(mod, "romfs", 8, path, sizeof path)) {
             found = true;
         }
-        // 2. Search for a 'nativeNX' directory (depth up to 8)
+        // 2. Search for a 'nativeNX' directory (depth up to 8) - strip /nativeNX so path holds the directory containing nativeNX
         else if (find_dir(mod, "nativeNX", 8, path, sizeof path)) {
+            char *slash = strrchr(path, '/');
+            if (slash) *slash = 0;
             found = true;
         }
         // 3. Search for an 'arc' directory (depth up to 8: texture/model/UI mods without wrapper)
@@ -214,9 +216,14 @@ int mods_romfs_layers(const char **out, int max) {
             if (slash) *slash = 0;
             found = true;
         }
+        // 4. Any other mod folder: layer it directly so plugins, configs, or loose assets are accessible in RomFS
+        else {
+            snprintf(path, sizeof path, "%s", mod);
+            found = true;
+        }
 
         if (!found) {
-            LOG("[mods] %s: no romfs, nativeNX, or arc folder found (skipping)\n", g_names[i]);
+            LOG("[mods] %s: skipping invalid folder\n", g_names[i]);
             continue;
         }
 
@@ -371,7 +378,10 @@ void mods_patch_module(Module *m, const uint8_t build_id[32]) {
                 if (!is_dir(mod)) continue;
             }
         }
-        if (!find_dir(mod, "exefs", 8, ex, sizeof ex)) continue;
+        if (!find_dir(mod, "exefs", 8, ex, sizeof ex)) {
+            // Also check if .pchtxt or .ips are placed directly inside the mod directory
+            snprintf(ex, sizeof ex, "%s", mod);
+        }
         DIR *d = opendir(ex);
         if (!d) continue;
         struct dirent *e;
