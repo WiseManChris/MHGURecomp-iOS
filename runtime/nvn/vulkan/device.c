@@ -57,10 +57,16 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_cb(VkDebugUtilsMessageSeverityFlagBi
 // Overwolf's implicit Vulkan layers hook vkCreateDevice and crash the process on startup, so switch them off for
 // this process (the loader reads these when the instance is created). MHGU_KEEP_VK_OVERLAYS=1 leaves them alone.
 static void disable_overwolf_layers(void) {
-    if (getenv("MHGU_KEEP_VK_OVERLAYS")) return;
-    static const char *const vars[] = {"DISABLE_VULKAN_OW_OVERLAY_LAYER", "DISABLE_VULKAN_OW_OBS_CAPTURE"};
-    for (size_t i = 0; i < sizeof vars / sizeof *vars; i++)
-        if (!getenv(vars[i])) SDL_setenv_unsafe(vars[i], "1", 0);
+    if (!getenv("MHGU_KEEP_VK_OVERLAYS")) {
+        static const char *const vars[] = {"DISABLE_VULKAN_OW_OVERLAY_LAYER", "DISABLE_VULKAN_OW_OBS_CAPTURE"};
+        for (size_t i = 0; i < sizeof vars / sizeof *vars; i++)
+            if (!getenv(vars[i])) SDL_setenv_unsafe(vars[i], "1", 0);
+    }
+#ifdef __APPLE__
+    // Disable Metal residency sets in MoltenVK to ensure rock-solid stability on iOS 18 / Apple Silicon M2
+    if (!getenv("MVK_CONFIG_RESIDENCY_SETS")) SDL_setenv_unsafe("MVK_CONFIG_RESIDENCY_SETS", "0", 0);
+    if (!getenv("MVK_CONFIG_USE_MTLRESIDENCYSETS")) SDL_setenv_unsafe("MVK_CONFIG_USE_MTLRESIDENCYSETS", "0", 0);
+#endif
 }
 
 static bool has_ext(VkExtensionProperties *e, uint32_t n, const char *name) {
@@ -235,8 +241,12 @@ static void create_device(void) {
                                   .queueCount = 1, .pQueuePriorities = &prio};
     VkDeviceCreateInfo di = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .pNext = &f, .queueCreateInfoCount = 1,
                              .pQueueCreateInfos = &qi, .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext};
+    LOG("[vk] creating logical device with %u extensions (pNext=%p)...\n", n_ext, di.pNext);
+    for (uint32_t i = 0; i < n_ext; i++) LOG("[vk]   dev ext[%u]: %s\n", i, ext[i]);
     VK_CHECK(vkCreateDevice(g_vk.phys, &di, NULL, &g_vk.dev));
+    LOG("[vk] logical device created successfully: %p\n", (void *)g_vk.dev);
     vkGetDeviceQueue(g_vk.dev, g_vk.qfam, 0, &g_vk.queue);
+    LOG("[vk] device queue obtained: %p\n", (void *)g_vk.queue);
     LOG("[vk] features: divisor %d, custom border %d, BC %d, ASTC %d\n", g_vk.divisor, g_vk.custom_border,
         h->textureCompressionBC, h->textureCompressionASTC_LDR);
 
@@ -252,9 +262,11 @@ static void create_device(void) {
         if (g_vk.msaa_counts & s) g_vk.msaa = s;
     if (g_vk.msaa != (uint32_t)g_config.msaa) LOG("[vk] MSAA %dx not supported: %ux\n", g_config.msaa, g_vk.msaa);
 
+    LOG("[vk] creating VMA allocator...\n");
     VmaAllocatorCreateInfo ai = {.physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
                                  .vulkanApiVersion = VK_API_VERSION_1_2};
     VK_CHECK(vmaCreateAllocator(&ai, &g_vk.vma));
+    LOG("[vk] VMA allocator created: %p\n", (void *)g_vk.vma);
 
     VkSemaphoreTypeCreateInfo st = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
                                     .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE, .initialValue = 0};

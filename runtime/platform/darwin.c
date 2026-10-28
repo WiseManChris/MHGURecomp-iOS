@@ -23,10 +23,21 @@
 #include "../platform.h"
 
 #if defined(__APPLE__)
-// MoltenVK references MTLResidencySetDescriptor (Metal 3.2 / iOS 18+).
-// On iOS < 18 or when linking against older SDKs (e.g. iOS 17), provide a weak
-// symbol so the Mach-O links cleanly without undefined symbol errors.
-__attribute__((weak)) void *OBJC_CLASS_$_MTLResidencySetDescriptor = NULL;
+#import <Foundation/Foundation.h>
+
+// Fallback Objective-C class stub for Metal 3.2 MTLResidencySetDescriptor.
+// libMoltenVK references _OBJC_CLASS_$_MTLResidencySetDescriptor. Providing a full
+// Objective-C class ensures that objc_msgSend finds a valid class structure with
+// valid isa and cache offsets (avoiding NULL class dereference crashes at 0x1e).
+@interface MTLResidencySetDescriptor : NSObject
+@property (nonatomic, copy) NSString *label;
+@property (nonatomic, assign) NSUInteger initialCapacity;
+@end
+
+@implementation MTLResidencySetDescriptor
+@synthesize label = _label;
+@synthesize initialCapacity = _initialCapacity;
+@end
 #endif
 
 // ---- guest address space
