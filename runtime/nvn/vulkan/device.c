@@ -646,13 +646,17 @@ void backend_init(void) {
     static bool done;
     if (done) return;
     done = true;
+    LOG("[vk] backend_init starting (main thread initialization)...\n");
     if (!ui_window()) FATAL("no window\n");
     create_instance();
+    LOG("[vk] creating Vulkan surface on window %p...\n", (void *)ui_window());
     if (!SDL_Vulkan_CreateSurface(ui_window(), g_vk.inst, NULL, &g_vk.surface)) FATAL("SDL_Vulkan_CreateSurface: %s\n", SDL_GetError());
+    LOG("[vk] Vulkan surface created successfully: %p\n", (void *)g_vk.surface);
     pick_device();
     create_device();
     vk_exec_init();
     vk_shaders_init();
     create_swapchain();
+    LOG("[vk] backend_init complete, swapchain ready (%ux%u)\n", g_vk.sc_extent.width, g_vk.sc_extent.height);
     atexit(exit_handler);
 }

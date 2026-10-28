@@ -14,6 +14,7 @@ volatile uint64_t g_present_count;
 static SDL_Window *window;
 
 SDL_Window *ui_window(void) { return window; }
+void backend_init(void);
 
 // The window's size when windowed: the settings' size (or the last windowed size), no larger than the desktop's free
 // area with the window frame.
@@ -88,6 +89,7 @@ void ui_init(void) {
 #ifndef __APPLE__
     if (g_config.display_mode != DISPLAY_WINDOWED) set_fullscreen(true);
 #endif
+    backend_init();
 }
 
 // Alt+Enter: windowed <-> the full-screen mode of the settings (Windowed in the settings: borderless).
