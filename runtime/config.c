@@ -385,6 +385,14 @@ void config_load(void) {
 
     const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
     desktop_w = dm ? dm->w : 1920, desktop_h = dm ? dm->h : 1080;
+#if defined(__APPLE__)
+    // On iOS/iPadOS, SDL display modes are returned in UIKit points (e.g. 480x300 or 960x640).
+    // Ensure native 1080p dimensions for sharp Retina display rendering!
+    if (desktop_w < 1920) {
+        desktop_w = 1920;
+        desktop_h = 1080;
+    }
+#endif
     if (!g_config.width) g_config.width = desktop_w, g_config.height = desktop_h;
 
     const char *e = getenv("MHGU_WINDOW");
@@ -405,7 +413,12 @@ void config_load(void) {
     if (e && parse_size(e, &w, &h)) render_auto = false, g_config.render_w = w, g_config.render_h = h;
 
     int tw = g_config.width, th = g_config.height;  // (Borderless shows the image at the desktop size)
+#if defined(__APPLE__)
+    if (tw < 1920) tw = 1920;
+    if (th < 1080) th = 1080;
+#else
     if (g_config.display_mode == DISPLAY_BORDERLESS) tw = tw < desktop_w ? tw : desktop_w, th = th < desktop_h ? th : desktop_h;
+#endif
     // The picture's shape: the window's or AspectRatio's, at least 16:10. The game lays its HUD out for 16:9, which
     // still fits down to 16:10 (a little flatter, nvn/vulkan/exec.c), so a narrower window (4:3) shows 16:10 with bars.
     // Wider than 16:9 shows more to the sides, 16:9 to 16:10 more above and below (camera_fovy, gen.py PATCHES).

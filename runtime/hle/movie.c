@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../hle.h"
+#include "../rt.h"
 
 HLE_FUNC("_ZN5movie9MediaDataC1Ev", md_ctor) { ST32(ARG(0), 0); }
 HLE_FUNC("_ZN5movie9MediaDataD1Ev", md_dtor) { ST32(ARG(0), 0); }
@@ -32,7 +33,17 @@ HLE_FUNC("_ZN5movie6Buffer18SetDataAndCapacityEPvj", buf_set_data) {
 HLE_FUNC("_ZN5movie12SetAllocatorEPFPvjjS0_EPFvS0_S0_EPFS0_S0_jS0_ES0_", movie_set_allocator) { RET(0); }
 HLE_FUNC("_ZN5movie11SetCoreMaskEy", movie_set_core_mask) { RET(0); }
 
-static void stub_err(Cpu *c) { RET(0x1000u); }
+#define MOVIE_EOS 4u
+
+static void stub_guest_event_op(Cpu *c, uint32_t event, const char *fn) {
+    if (!event) return;
+    uint32_t saved[4];
+    memcpy(saved, c->r, sizeof saved);
+    c->r[0] = event;
+    guest_call(c, guest_sym(fn));
+    memcpy(c->r, saved, sizeof saved);
+}
+
 static void stub_zero(Cpu *c) { RET(0); }
 
 static uint32_t make_vtable(HostFn *fns, int n, int kind) {
@@ -41,33 +52,151 @@ static uint32_t make_vtable(HostFn *fns, int n, int kind) {
     for (int i = 0; i < 32; i++) {
         snprintf(name, sizeof name, "<movie %s slot %d>", kind ? "Decoder" : "Extractor", i);
         HostFn f = i < n ? fns[i] : NULL;
-        ST32(t + 4 * i, hle_register(name, f));
+        ST32(t + 4 * i, hle_register(name, f ? f : stub_zero));
     }
     return t;
+}
+
+// Extractor stub methods
+static void stub_ex_set_data_source(Cpu *c) {
+    LOG("[movie] Extractor::SetDataSource: %s (movie playback disabled, skipping)\n",
+        ARG(1) ? (const char *)G2H(ARG(1)) : "(null)");
+    RET(0);
+}
+
+static void stub_ex_get_track_count(Cpu *c) {
+    if (ARG(1)) ST32(ARG(1), 0);
+    LOG("[movie] Extractor::GetTrackCount -> 0 tracks\n");
+    RET(0);
+}
+
+static void stub_ex_get_sample_track(Cpu *c) {
+    RET(0xFFFFFFFFu); // -1: no sample track
+}
+
+static void stub_ex_get_sample_time(Cpu *c) {
+    if (ARG(1)) { ST32(ARG(1), 0); ST32(ARG(1) + 4, 0); }
+    RET(0);
 }
 
 HLE_FUNC("_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE", movie_extractor_ctor) {
     static uint32_t vt;
     if (!vt) {
         HostFn f[16];
-        for (int i = 0; i < 16; i++) f[i] = stub_err;
-        f[0] = stub_zero; f[1] = stub_zero;
+        for (int i = 0; i < 16; i++) f[i] = stub_zero;
+        f[2] = stub_ex_set_data_source;
+        f[4] = stub_ex_get_track_count;
+        f[9] = stub_ex_get_sample_track;
+        f[12] = stub_ex_get_sample_time;
+        f[15] = stub_ex_set_data_source;
         vt = make_vtable(f, 16, 0);
     }
     ST32(ARG(0), vt);
     ST32(ARG(0) + 4, 0);
+    LOG("[movie] Extractor created (stub)\n");
+}
+
+// Decoder stub methods
+typedef struct {
+    uint32_t events[4];
+} StubDecoder;
+
+#define MAX_STUB_DECODERS 64
+static StubDecoder g_stub_decoders[MAX_STUB_DECODERS];
+static int g_num_stub_decoders = 0;
+
+static void stub_dec_configure(Cpu *c) {
+    LOG("[movie] Decoder::Configure\n");
+    RET(0);
+}
+
+static void stub_dec_register_events(Cpu *c) {
+    uint32_t h = LD32(ARG(0) + 4);
+    if (h > 0 && h <= MAX_STUB_DECODERS && ARG(1)) {
+        StubDecoder *d = &g_stub_decoders[h - 1];
+        for (int i = 0; i < 4; i++) d->events[i] = LD32(ARG(1) + 4 * i);
+        LOG("[movie] Decoder::RegisterEvents [%x, %x, %x, %x]\n", d->events[0], d->events[1], d->events[2], d->events[3]);
+    }
+    RET(0);
+}
+
+static void stub_dec_start(Cpu *c) {
+    uint32_t h = LD32(ARG(0) + 4);
+    LOG("[movie] Decoder::Start -> signalling events with EOS\n");
+    if (h > 0 && h <= MAX_STUB_DECODERS) {
+        StubDecoder *d = &g_stub_decoders[h - 1];
+        if (d->events[0]) stub_guest_event_op(c, d->events[0], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+        if (d->events[1]) stub_guest_event_op(c, d->events[1], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+    }
+    RET(0);
+}
+
+static void stub_dec_stop(Cpu *c) {
+    uint32_t h = LD32(ARG(0) + 4);
+    if (h > 0 && h <= MAX_STUB_DECODERS) {
+        StubDecoder *d = &g_stub_decoders[h - 1];
+        for (int i = 0; i < 4; i++) {
+            if (d->events[i]) stub_guest_event_op(c, d->events[i], "_ZN2nn2os10ClearEventEPNS0_9EventTypeE");
+        }
+    }
+    RET(0);
+}
+
+static void stub_dec_acquire_input(Cpu *c) {
+    if (ARG(1)) ST32(ARG(1), 0);
+    RET(0);
+}
+
+static void stub_dec_send_input(Cpu *c) {
+    uint32_t h = LD32(ARG(0) + 4);
+    if (h > 0 && h <= MAX_STUB_DECODERS) {
+        StubDecoder *d = &g_stub_decoders[h - 1];
+        if (d->events[0]) stub_guest_event_op(c, d->events[0], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+        if (d->events[1]) stub_guest_event_op(c, d->events[1], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+    }
+    RET(0);
+}
+
+static void stub_dec_acquire_output(Cpu *c) {
+    if (ARG(1)) ST32(ARG(1), 0);
+    if (ARG(2)) { ST32(ARG(2), 0); ST32(ARG(2) + 4, 0); }
+    if (ARG(3)) ST32(ARG(3), MOVIE_EOS); // Signal MOVIE_EOS (4) so movie player exits!
+    if (STK(0)) ST32(STK(0), 0);
+    LOG("[movie] Decoder::AcquireOutputBuffer -> MOVIE_EOS (movie playback finished)\n");
+    uint32_t h = LD32(ARG(0) + 4);
+    if (h > 0 && h <= MAX_STUB_DECODERS) {
+        StubDecoder *d = &g_stub_decoders[h - 1];
+        if (d->events[1]) stub_guest_event_op(c, d->events[1], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+    }
+    RET(0);
+}
+
+static void stub_dec_get_output_buffer_size(Cpu *c) {
+    if (ARG(2)) ST32(ARG(2), 0);
+    RET(0);
 }
 
 HLE_FUNC("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeE", movie_decoder_ctor) {
     static uint32_t vt;
     if (!vt) {
         HostFn f[19];
-        for (int i = 0; i < 19; i++) f[i] = stub_err;
-        f[0] = stub_zero; f[1] = stub_zero;
+        for (int i = 0; i < 19; i++) f[i] = stub_zero;
+        f[2] = stub_dec_configure;
+        f[3] = stub_dec_register_events;
+        f[5] = stub_dec_start;
+        f[6] = stub_dec_stop;
+        f[9] = stub_dec_acquire_input;
+        f[11] = stub_dec_send_input;
+        f[12] = stub_dec_acquire_output;
+        f[14] = stub_dec_get_output_buffer_size;
         vt = make_vtable(f, 19, 1);
     }
+    int id = (g_num_stub_decoders % MAX_STUB_DECODERS) + 1;
+    g_num_stub_decoders++;
+    memset(&g_stub_decoders[id - 1], 0, sizeof(StubDecoder));
     ST32(ARG(0), vt);
-    ST32(ARG(0) + 4, 0);
+    ST32(ARG(0) + 4, (uint32_t)id);
+    LOG("[movie] Decoder created (stub id %d)\n", id);
 }
 #else
 // movie:: (the Switch's media library, subsdk0, an Android MediaExtractor / MediaCodec-style API) implemented with
