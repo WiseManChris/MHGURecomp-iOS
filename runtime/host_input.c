@@ -33,12 +33,24 @@ static bool keys[SDL_SCANCODE_COUNT];
 static SDL_Gamepad *pad;
 
 static const struct { SDL_Scancode sc; int btn; } key_buttons[] = {
-    {SDL_SCANCODE_SPACE, BTN_B}, {SDL_SCANCODE_R, BTN_Y},
-    {SDL_SCANCODE_Q, BTN_L}, {SDL_SCANCODE_E, BTN_R}, {SDL_SCANCODE_TAB, BTN_ZL}, {SDL_SCANCODE_T, BTN_ZR},
-    {SDL_SCANCODE_RETURN, BTN_PLUS}, {SDL_SCANCODE_KP_ENTER, BTN_PLUS}, {SDL_SCANCODE_BACKSPACE, BTN_MINUS},
-    {SDL_SCANCODE_UP, BTN_UP}, {SDL_SCANCODE_LEFT, BTN_LEFT}, {SDL_SCANCODE_DOWN, BTN_DOWN}, {SDL_SCANCODE_RIGHT, BTN_RIGHT},
-    {SDL_SCANCODE_LCTRL, BTN_LSTICK}, {SDL_SCANCODE_RCTRL, BTN_LSTICK},
-    {SDL_SCANCODE_LALT, BTN_RSTICK}, {SDL_SCANCODE_RALT, BTN_RSTICK},
+    // Face buttons: Nintendo layout (A right, B bottom, X top, Y left) - matching nxnative front_mac/front_ios
+    {SDL_SCANCODE_J, BTN_A}, {SDL_SCANCODE_L, BTN_A},
+    {SDL_SCANCODE_K, BTN_B}, {SDL_SCANCODE_SPACE, BTN_B},
+    {SDL_SCANCODE_U, BTN_X}, {SDL_SCANCODE_X, BTN_X},
+    {SDL_SCANCODE_I, BTN_Y}, {SDL_SCANCODE_R, BTN_Y},
+    // Shoulders & triggers
+    {SDL_SCANCODE_Q, BTN_L}, {SDL_SCANCODE_E, BTN_R},
+    {SDL_SCANCODE_Z, BTN_ZL}, {SDL_SCANCODE_TAB, BTN_ZL},
+    {SDL_SCANCODE_C, BTN_ZR}, {SDL_SCANCODE_T, BTN_ZR},
+    // Menus: Plus (Start), Minus (Select)
+    {SDL_SCANCODE_RETURN, BTN_PLUS}, {SDL_SCANCODE_KP_ENTER, BTN_PLUS},
+    {SDL_SCANCODE_BACKSPACE, BTN_MINUS}, {SDL_SCANCODE_ESCAPE, BTN_MINUS},
+    // D-Pad
+    {SDL_SCANCODE_UP, BTN_UP}, {SDL_SCANCODE_LEFT, BTN_LEFT},
+    {SDL_SCANCODE_DOWN, BTN_DOWN}, {SDL_SCANCODE_RIGHT, BTN_RIGHT},
+    // Sticks
+    {SDL_SCANCODE_LCTRL, BTN_LSTICK}, {SDL_SCANCODE_RCTRL, BTN_LSTICK}, {SDL_SCANCODE_F, BTN_LSTICK},
+    {SDL_SCANCODE_LALT, BTN_RSTICK}, {SDL_SCANCODE_RALT, BTN_RSTICK}, {SDL_SCANCODE_G, BTN_RSTICK},
 };
 
 // ---- mouse: captured (relative mode) after a click in the window, Esc lets it go. Its movement is the right stick:
@@ -410,8 +422,18 @@ void host_input_event(const SDL_Event *e) {
     case SDL_EVENT_MOUSE_MOTION:
         if (mouse_captured) mouse_dx += e->motion.xrel, mouse_dy += e->motion.yrel;
         break;
+    case SDL_EVENT_FINGER_DOWN:
+        mouse_buttons |= B(BTN_A);
+        break;
+    case SDL_EVENT_FINGER_UP:
+        mouse_buttons &= ~B(BTN_A);
+        break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN: case SDL_EVENT_MOUSE_BUTTON_UP: {
+#if defined(__APPLE__)
+        int btn = (e->button.button == SDL_BUTTON_LEFT) ? BTN_A : BTN_B;
+#else
         int btn = e->button.button == SDL_BUTTON_LEFT ? BTN_X : e->button.button == SDL_BUTTON_RIGHT ? BTN_A : -1;
+#endif
         if (btn < 0) break;
         if (!e->button.down) {
             mouse_buttons &= ~B(btn);

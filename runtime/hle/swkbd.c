@@ -12,11 +12,38 @@
 #include "../hle.h"
 #include "../textinput.h"
 
+#define ARG_TEXT_MAX 0x7d0
+
+#if defined(__APPLE__)
+int plat_ios_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap);
+#endif
+
+static uint32_t cb_arg(const char *text) {
+    static uint32_t arg;
+    if (!arg) arg = hle_alloc(0x800);
+    memset(G2H(arg), 0, 0x800);
+    snprintf((char *)G2H(arg), ARG_TEXT_MAX, "%s", text ? text : "");
+    uint32_t chars = 0;
+    for (const char *s = text; s && *s; s++) chars += ((unsigned char)*s & 0xC0) != 0x80;
+    ST32(arg + 0x7d4, chars);
+    for (uint32_t o = 0x7d8; o <= 0x7e0; o += 4) ST32(o + arg, chars);
+    return arg;
+}
+
 // nn::swkbd::ShowKeyboard(String *out, const ShowKeyboardArg &) -> Result. String = {void *ptr; size_t size}.
 HLE_FUNC("_ZN2nn5swkbd12ShowKeyboardEPNS0_6StringERKNS0_15ShowKeyboardArgE", swkbd_show) {
     uint32_t ptr = LD32(ARG(0)), size = LD32(ARG(0) + 4);
-    const char *name = getenv("MHGU_NAME");
-    if (!name || !*name) name = "Hunter";
+    char name[256] = "Hunter";
+    const char *script = getenv("MHGU_NAME");
+    if (script && *script) {
+        snprintf(name, sizeof name, "%s", script);
+    }
+#if defined(__APPLE__)
+    else {
+        plat_ios_text_input("Hunter Name", "Type your character name:", "Hunter", "Hunter", 16, name, sizeof name);
+    }
+#endif
+    if (!name[0]) snprintf(name, sizeof name, "Hunter");
     if (ptr && size) {
         memset(G2H(ptr), 0, size);
         snprintf((char *)G2H(ptr), size, "%s", name);
@@ -48,20 +75,6 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard26SetMovedCursorCallbackUtf8EPFvPKNS0_18Mo
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard27SetFinishedKeyboardCallbackEPFvvE", ik_cb_finished) { (void)c; }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard31SetReleasedUserWordInfoCallbackEPFvvE", ik_cb_released) { cb_released = ARG(1); }
 
-// The callbacks' argument (Changed/DecidedEnter/MovedCursor ArgUtf8, as the game reads them): the text at +0 (up to
-// 0x7d4 bytes), its length in characters at +0x7d4, then the cursor position (+0x7d8; ChangedString also has the
-// dictionary range there: given the cursor too).
-#define ARG_TEXT_MAX 0x7d0
-static uint32_t cb_arg(const char *text, int chars) {
-    static uint32_t arg;
-    if (!arg) arg = hle_alloc(0x800);
-    memset(G2H(arg), 0, 0x800);
-    snprintf((char *)G2H(arg), ARG_TEXT_MAX, "%s", text);
-    ST32(arg + 0x7d4, (uint32_t)chars);
-    for (uint32_t o = 0x7d8; o <= 0x7e0; o += 4) ST32(o + arg, (uint32_t)chars);
-    return arg;
-}
-
 static void callback(Cpu *c, uint32_t fn, uint32_t arg) {
     if (!fn) return;
     c->r[0] = arg;
@@ -73,28 +86,71 @@ static void callback(Cpu *c, uint32_t fn, uint32_t arg) {
 static int ik_state;
 static char ik_initial[ARG_TEXT_MAX + 4];
 static int ik_auto;  // MHGU_NAME / MHGU_INLINE_CANCEL: answered on the second Calc after Appear
+static int ik_pending_appear;
+
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard4CalcEv", ik_calc) {
     uint32_t saved[4] = {c->r[0], c->r[1], c->r[2], c->r[3]};
     if (init_pending && cb_init_done) { init_pending = 0; guest_call(c, cb_init_done); }
     if (init_pending == 0 && ik_state == 0) ik_state = 1;
     if (words_pending && cb_released) { words_pending = 0; guest_call(c, cb_released); }
+
     if (ik_state == 3 && ik_auto && ++ik_auto > 2) {
         const char *name = getenv("MHGU_NAME");
         if (getenv("MHGU_INLINE_CANCEL")) callback(c, cb_cancel, 0);
-        else callback(c, cb_enter, cb_arg(name ? name : "Hunter", (int)strlen(name ? name : "Hunter")));
+        else callback(c, cb_enter, cb_arg(name ? name : "Hunter"));
         ik_auto = 0;
         ik_state = 1;
-    } else if (ik_state == 3 && !ik_auto) {
+    } else if (ik_state == 3 && ik_pending_appear) {
+        ik_pending_appear = 0;
+        char text[ARG_TEXT_MAX + 4] = {0};
+        const char *script = getenv("MHGU_NAME");
+        int r = 0;
+        if (script && *script) {
+            snprintf(text, sizeof text, "%s", script);
+            r = 1;
+        }
+#if defined(__APPLE__)
+        else {
+            r = plat_ios_text_input("Hunter Name", "Type your character name:", "Hunter",
+                                    ik_initial[0] ? ik_initial : "Hunter", 16, text, sizeof text);
+        }
+#endif
+        if (r > 0 && text[0]) {
+            LOG("[swkbd] inline keyboard entered name: \"%s\"\n", text);
+            uint32_t arg = cb_arg(text);
+            if (cb_changed) callback(c, cb_changed, arg);
+            if (cb_moved) callback(c, cb_moved, arg);
+            callback(c, cb_enter, arg);
+            textinput_end();
+            ik_state = 1;
+        } else if (getenv("MHGU_INLINE_CANCEL")) {
+            LOG("[swkbd] inline keyboard cancelled\n");
+            textinput_end();
+            callback(c, cb_cancel, 0);
+            ik_state = 1;
+        } else {
+            const char *def = ik_initial[0] ? ik_initial : "Hunter";
+            LOG("[swkbd] inline keyboard confirmed name: \"%s\"\n", def);
+            uint32_t arg = cb_arg(def);
+            if (cb_changed) callback(c, cb_changed, arg);
+            if (cb_moved) callback(c, cb_moved, arg);
+            callback(c, cb_enter, arg);
+            textinput_end();
+            ik_state = 1;
+        }
+    }
+#if !defined(__APPLE__)
+    else if (ik_state == 3 && !ik_auto) {
         static char text[ARG_TEXT_MAX + 4];
         int chars, ev = textinput_poll(text, sizeof text, &chars);
         if (ev == TI_CHANGED) {
-            uint32_t arg = cb_arg(text, chars);
+            uint32_t arg = cb_arg(text);
             callback(c, cb_changed, arg);
             callback(c, cb_moved, arg);
         } else if (ev == TI_ENTER) {
             LOG("[swkbd] entered \"%s\"\n", text);
             textinput_end();
-            callback(c, cb_enter, cb_arg(text, chars));
+            callback(c, cb_enter, cb_arg(text));
             ik_state = 1;
         } else if (ev == TI_CANCEL) {
             LOG("[swkbd] text entry cancelled\n");
@@ -103,9 +159,11 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard4CalcEv", ik_calc) {
             ik_state = 1;
         }
     }
+#endif
     memcpy(c->r, saved, sizeof saved);
     RET(ik_state);
 }
+
 // AppearArg: u32 keyboard mode, char16 ok text[9], 2 x char16 optional symbol keys, 2 x bool, u32 invalid
 // characters, s32 max length (+0x20), s32 min length.
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard6AppearERKNS0_9AppearArgE", ik_appear) {
@@ -117,16 +175,13 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard6AppearERKNS0_9AppearArgE", ik_appear) {
     LOG("[swkbd] inline keyboard shown (frame %llu), AppearArg%s\n", (unsigned long long)g_present_count, hex);
     ik_state = 3;
     ik_auto = getenv("MHGU_NAME") || getenv("MHGU_INLINE_CANCEL") ? 1 : 0;
-    if (!ik_auto) {
-        textinput_begin(ik_initial, max);
-#if defined(__APPLE__)
-        void plat_ios_show_text_input(const char *title, const char *initial, int max_chars);
-        plat_ios_show_text_input("Hunter Name", ik_initial[0] ? ik_initial : "Hunter", max);
-#endif
-    }
+    ik_pending_appear = !ik_auto;
+    textinput_begin(ik_initial, max);
 }
+
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard9DisappearEv", ik_disappear) {
     if (ik_state == 3) LOG("[swkbd] inline keyboard closed by the game\n");
+    ik_pending_appear = 0;
     textinput_end();
     if (ik_state == 3) ik_state = 1;
 }
@@ -178,7 +233,8 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard25GetImageMemoryRequirementEPjS2_", ik_ima
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard8GetImageEPvj", ik_image) { RET(0); }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard26IsUsedTouchPointByKeyboardEii", ik_touch) { RET(0); }
 HLE_FUNC("_ZNK2nn5swkbd14InlineKeyboard13GetWindowSizeEPiS2_", ik_window_size) {
-    if (ARG(1)) ST32(ARG(1), 0);
-    if (ARG(2)) ST32(ARG(2), 0);
+    // 1280x720 matches hardware / nxnative; 0x0 makes texture allocation fail
+    if (ARG(1)) ST32(ARG(1), 1280);
+    if (ARG(2)) ST32(ARG(2), 720);
 }
 HLE_FUNC("_ZN2nn5swkbd12UserWordInfo25GetRequiredWorkBufferSizeEi", swkbd_words_size) { RET(0x100 + ARG(0) * 0x80); }

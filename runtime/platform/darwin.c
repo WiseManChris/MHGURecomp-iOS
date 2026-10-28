@@ -612,92 +612,108 @@ void plat_fatal_notice(void) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
-static UIAlertController *s_active_text_alert = nil;
-
-void plat_ios_show_text_input(const char *title, const char *initial, int max_chars) {
+int plat_ios_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
     (void)max_chars;
-    NSString *nsTitle = (title && *title) ? [NSString stringWithUTF8String:title] : @"Character Name";
-    NSString *nsInitial = (initial && *initial) ? [NSString stringWithUTF8String:initial] : @"Hunter";
+    __block int r = 0;
+    __block NSString *enteredText = nil;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+
+    NSString *t = (title && *title) ? [NSString stringWithUTF8String:title] : @"Character Name";
+    NSString *m = (sub && *sub) ? [NSString stringWithUTF8String:sub] : @"Enter character name:";
+    NSString *init = (initial && *initial) ? [NSString stringWithUTF8String:initial] : @"Hunter";
+    NSString *ph = (guide && *guide) ? [NSString stringWithUTF8String:guide] : @"Hunter";
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        UIWindow *keyWin = nil;
-        if (@available(iOS 13.0, *)) {
-            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                if ([scene isKindOfClass:[UIWindowScene class]]) {
-                    UIWindowScene *ws = (UIWindowScene *)scene;
-                    for (UIWindow *w in ws.windows) {
-                        if (w.isKeyWindow) { keyWin = w; break; }
-                    }
-                    if (keyWin) break;
-                }
-            }
-        }
-        if (!keyWin) {
-            for (UIWindow *w in [UIApplication sharedApplication].windows) {
-                if (w.isKeyWindow) { keyWin = w; break; }
-            }
-        }
-        if (!keyWin) keyWin = [UIApplication sharedApplication].windows.firstObject;
+        UIAlertController *ac = [UIAlertController alertControllerWithTitle:t
+                                                                    message:m
+                                                             preferredStyle:UIAlertControllerStyleAlert];
 
-        UIViewController *topVC = keyWin.rootViewController;
-        while (topVC.presentedViewController) {
-            topVC = topVC.presentedViewController;
-        }
-        if (!topVC) return;
-
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:nsTitle
-                                                                       message:@"Enter a name or press OK / Return on keyboard / Start on controller:"
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-        s_active_text_alert = alert;
-
-        [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
-            textField.text = nsInitial;
-            textField.placeholder = @"Hunter";
-            textField.autocapitalizationType = UITextAutocapitalizationTypeWords;
-            textField.clearButtonMode = UITextFieldViewModeWhileEditing;
-            textField.returnKeyType = UIReturnKeyDone;
+        [ac addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull f) {
+            f.text = init;
+            f.placeholder = ph;
+            f.autocapitalizationType = UITextAutocapitalizationTypeWords;
+            f.clearButtonMode = UITextFieldViewModeWhileEditing;
+            f.returnKeyType = UIReturnKeyDone;
         }];
 
         UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"OK"
                                                            style:UIAlertActionStyleDefault
                                                          handler:^(UIAlertAction * _Nonnull action) {
-            s_active_text_alert = nil;
-            UITextField *tf = alert.textFields.firstObject;
-            NSString *text = tf.text;
-            if (!text || text.length == 0) text = @"Hunter";
-            const char *utf8 = [text UTF8String];
-            textinput_set(utf8);
-            textinput_key(TI_ENTER);
+            (void)action;
+            r = 1;
+            UITextField *tf = ac.textFields.firstObject;
+            if (tf && tf.text) {
+                enteredText = [tf.text copy];
+            }
+            dispatch_semaphore_signal(done);
         }];
 
         UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel"
                                                                style:UIAlertActionStyleCancel
                                                              handler:^(UIAlertAction * _Nonnull action) {
-            s_active_text_alert = nil;
-            textinput_key(TI_CANCEL);
+            (void)action;
+            r = 0;
+            dispatch_semaphore_signal(done);
         }];
 
-        [alert addAction:okAction];
-        [alert addAction:cancelAction];
+        [ac addAction:okAction];
+        [ac addAction:cancelAction];
 
-        [topVC presentViewController:alert animated:YES completion:^{
-            UITextField *tf = alert.textFields.firstObject;
+        UIViewController *vc = nil;
+        for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]]) {
+                for (UIWindow *w in ((UIWindowScene *)s).windows) {
+                    if (w.isKeyWindow) { vc = w.rootViewController; break; }
+                }
+                if (vc) break;
+            }
+        }
+        if (!vc) {
+            for (UIWindow *w in UIApplication.sharedApplication.windows) {
+                if (w.isKeyWindow) { vc = w.rootViewController; break; }
+            }
+        }
+        if (!vc) vc = UIApplication.sharedApplication.windows.firstObject.rootViewController;
+
+        while (vc.presentedViewController && !vc.presentedViewController.isBeingDismissed) {
+            vc = vc.presentedViewController;
+        }
+
+        if (!vc) {
+            dispatch_semaphore_signal(done);
+            return;
+        }
+
+        [vc presentViewController:ac animated:YES completion:^{
+            UITextField *tf = ac.textFields.firstObject;
             [tf becomeFirstResponder];
         }];
     });
+
+    dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
+
+    if (!r || !enteredText || enteredText.length == 0) {
+        if (enteredText) [enteredText release];
+        return 0;
+    }
+
+    snprintf(out, out_cap, "%s", [enteredText UTF8String] ? [enteredText UTF8String] : "");
+    [enteredText release];
+    return 1;
 }
 
-void plat_ios_dismiss_text_input(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (s_active_text_alert) {
-            [s_active_text_alert dismissViewControllerAnimated:YES completion:nil];
-            s_active_text_alert = nil;
-        }
-    });
+void plat_ios_show_text_input(const char *title, const char *initial, int max_chars) {
+    (void)title; (void)initial; (void)max_chars;
 }
+
+void plat_ios_dismiss_text_input(void) {}
 
 #pragma clang diagnostic pop
 #else
+int plat_ios_text_input(const char *title, const char *sub, const char *guide, const char *initial, int max_chars, char *out, int out_cap) {
+    (void)title; (void)sub; (void)guide; (void)initial; (void)max_chars; (void)out; (void)out_cap;
+    return -1;
+}
 void plat_ios_show_text_input(const char *title, const char *initial, int max_chars) {
     (void)title; (void)initial; (void)max_chars;
 }
