@@ -289,6 +289,8 @@ void plat_setup_ios_documents(void) {
 
         // 8. Set working directory to Documents
         chdir([docPath UTF8String]);
+        setenv("MHGU_LOG_FILES", "1", 0);
+        setenv("MHGU_MOVIE_TRACE", "1", 0);
         fprintf(stderr, "=== MHGU Recomp iOS Startup ===\n");
         fprintf(stderr, "[plat] Documents initialized at: %s\n", [docPath UTF8String]);
         fflush(stderr);

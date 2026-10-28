@@ -144,6 +144,7 @@ static uint32_t resolve(Module *m, uint32_t symidx) {
     uint32_t a = loader_find_symbol(name);
     if (a) return a;
     if ((s->info >> 4) == 2) return 0;  // weak undefined
+    LOG("[loader] UNBOUND import in %s: %s\n", m->name, name);
     return hle_register(name, NULL);
 }
 

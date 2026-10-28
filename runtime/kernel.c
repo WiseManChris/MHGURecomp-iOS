@@ -755,7 +755,7 @@ static void *dump_threads(void *arg) {
     int secs = (int)(intptr_t)arg;
     for (;;) {
         plat_sleep_until_ns(plat_now_ns() + (uint64_t)secs * 1000000000ull);
-        secs = 10;
+        secs = 3;
         static const char *const kinds[] = {"running", "mutex", "condvar", "arbiter"};
         pthread_mutex_lock(&g_klock);
         LOG("[threads] ---- dump\n");
@@ -792,9 +792,11 @@ static void *dump_threads(void *arg) {
 }
 
 void kernel_init(void) {
-    if (getenv("MHGU_DUMP_THREADS")) {
+    int dump_secs = 5;
+    if (getenv("MHGU_DUMP_THREADS")) dump_secs = atoi(getenv("MHGU_DUMP_THREADS"));
+    if (dump_secs > 0) {
         pthread_t th;
-        pthread_create(&th, NULL, dump_threads, (void *)(intptr_t)atoi(getenv("MHGU_DUMP_THREADS")));
+        pthread_create(&th, NULL, dump_threads, (void *)(intptr_t)dump_secs);
     }
     region_add(TLS_BASE, TLS_SIZE, 0xC, 3);
     region_add(HLE_HEAP, HLE_HEAP_SIZE, 4, 3);

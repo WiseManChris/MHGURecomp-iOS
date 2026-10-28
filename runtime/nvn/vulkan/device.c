@@ -607,6 +607,9 @@ void backend_present(NvnTexture *t) {
     }
     g_frames++;
     g_present_count = g_frames;
+    if ((g_frames % 60) == 0 || g_frames < 10) {
+        LOG("[vk] frame %llu presented (tex %ux%u)\n", (unsigned long long)g_frames, t ? t->width : 0, t ? t->height : 0);
+    }
     {   // (debug) MHGU_CONTROL "dump": the next whole frame's passes (exec.c dump_pass)
         extern volatile int g_dump_active, g_dump_request;
         extern int g_dump_no, g_dump_frame;
