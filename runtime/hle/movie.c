@@ -1,19 +1,127 @@
 #ifdef MHGU_NO_FFMPEG
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include "../hle.h"
 #include "../rt.h"
 
-HLE_FUNC("_ZN5movie9MediaDataC1Ev", md_ctor) { ST32(ARG(0), 0); }
-HLE_FUNC("_ZN5movie9MediaDataC2Ev", md_ctor2) { ST32(ARG(0), 0); }
-HLE_FUNC("_ZN5movie9MediaDataD1Ev", md_dtor) { ST32(ARG(0), 0); }
-HLE_FUNC("_ZN5movie9MediaDataD2Ev", md_dtor2) { ST32(ARG(0), 0); }
-HLE_FUNC("_ZN5movie9MediaData5ClearEv", md_clear_hle) { (void)c; }
-HLE_FUNC("_ZNK5movie9MediaData9FindInt32EPKcPi", md_find_int32) { RET(0); }
-HLE_FUNC("_ZNK5movie9MediaData9FindInt64EPKcPx", md_find_int64) { RET(0); }
-HLE_FUNC("_ZNK5movie9MediaData10FindStringEPKcPS2_", md_find_string) { RET(0); }
-HLE_FUNC("_ZNK5movie9MediaData8FindRectEPKcPiS3_S3_S3_", md_find_rect) { RET(0); }
+#define MOVIE_EOS 4u
+#define MOVIE_ERR 0x1000u
 
+// ------------------------------------------------------------------ host handles
+#define MAX_HANDLES 1024
+static void *g_handles[MAX_HANDLES];
+static pthread_mutex_t g_handle_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static uint32_t handle_new(void *p) {
+    pthread_mutex_lock(&g_handle_lock);
+    for (uint32_t i = 0; i < MAX_HANDLES; i++)
+        if (!g_handles[i]) { g_handles[i] = p; pthread_mutex_unlock(&g_handle_lock); return i + 1; }
+    pthread_mutex_unlock(&g_handle_lock);
+    FATAL("[movie] out of handles\n");
+}
+static void *handle_get_ptr(uint32_t h) { return h && h <= MAX_HANDLES ? g_handles[h - 1] : NULL; }
+static void handle_free(uint32_t h) { if (h && h <= MAX_HANDLES) g_handles[h - 1] = NULL; }
+
+// Strings handed to the game (MediaData::FindString): interned in guest memory, never freed.
+static uint32_t guest_string(const char *s) {
+    static struct { char *s; uint32_t g; } tab[64];
+    static int n;
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < n; i++)
+        if (!strcmp(tab[i].s, s)) { pthread_mutex_unlock(&lock); return tab[i].g; }
+    uint32_t g = hle_alloc((uint32_t)strlen(s) + 1);
+    strcpy((char *)G2H(g), s);
+    if (n < 64) tab[n].s = strdup(s), tab[n++].g = g;
+    pthread_mutex_unlock(&lock);
+    return g;
+}
+
+// ------------------------------------------------------------------ MediaData
+typedef struct { char *key; char *sval; int64_t ival; bool is_str; } MdEntry;
+typedef struct { MdEntry e[32]; int n; } MediaData;
+
+static MediaData *md(uint32_t guest) {
+    if (!guest) return NULL;
+    uint32_t h = LD32(guest);
+    MediaData *m = handle_get_ptr(h);
+    if (!m) {
+        m = calloc(1, sizeof *m);
+        ST32(guest, handle_new(m));
+    }
+    return m;
+}
+static void md_clear(MediaData *m) {
+    if (!m) return;
+    for (int i = 0; i < m->n; i++) { free(m->e[i].key); free(m->e[i].sval); }
+    m->n = 0;
+}
+static MdEntry *md_slot(MediaData *m, const char *k) {
+    if (!m) return NULL;
+    for (int i = 0; i < m->n; i++) if (!strcmp(m->e[i].key, k)) return &m->e[i];
+    if (m->n == 32) return NULL;
+    MdEntry *e = &m->e[m->n++];
+    memset(e, 0, sizeof *e);
+    e->key = strdup(k);
+    return e;
+}
+static void md_set_int(MediaData *m, const char *k, int64_t v) { MdEntry *e = md_slot(m, k); if (e) { e->ival = v; e->is_str = false; } }
+static void md_set_str(MediaData *m, const char *k, const char *v) {
+    MdEntry *e = md_slot(m, k);
+    if (e) { free(e->sval); e->sval = strdup(v); e->is_str = true; }
+}
+static MdEntry *md_find(MediaData *m, const char *k, bool str) {
+    if (!m) return NULL;
+    for (int i = 0; i < m->n; i++)
+        if (m->e[i].is_str == str && !strcmp(m->e[i].key, k)) return &m->e[i];
+    return NULL;
+}
+
+HLE_FUNC("_ZN5movie9MediaDataC1Ev", md_ctor) { ST32(ARG(0), handle_new(calloc(1, sizeof(MediaData)))); }
+HLE_FUNC("_ZN5movie9MediaDataC2Ev", md_ctor2) { md_ctor(c); }
+HLE_FUNC("_ZN5movie9MediaDataD1Ev", md_dtor) {
+    uint32_t h = LD32(ARG(0));
+    MediaData *m = handle_get_ptr(h);
+    if (m) { md_clear(m); free(m); handle_free(h); }
+    ST32(ARG(0), 0);
+}
+HLE_FUNC("_ZN5movie9MediaDataD2Ev", md_dtor2) { md_dtor(c); }
+HLE_FUNC("_ZN5movie9MediaData5ClearEv", md_clear_hle) { md_clear(md(ARG(0))); }
+HLE_FUNC("_ZNK5movie9MediaData9FindInt32EPKcPi", md_find_int32) {
+    MdEntry *e = md_find(md(ARG(0)), gstr(ARG(1)), false);
+    if (e && ARG(2)) ST32(ARG(2), (uint32_t)(int32_t)e->ival);
+    RET(e != NULL);
+}
+HLE_FUNC("_ZNK5movie9MediaData9FindInt64EPKcPx", md_find_int64) {
+    MdEntry *e = md_find(md(ARG(0)), gstr(ARG(1)), false);
+    if (e && ARG(2)) { ST32(ARG(2), (uint32_t)e->ival); ST32(ARG(2) + 4, (uint32_t)((uint64_t)e->ival >> 32)); }
+    RET(e != NULL);
+}
+HLE_FUNC("_ZNK5movie9MediaData10FindStringEPKcPS2_", md_find_string) {
+    MdEntry *e = md_find(md(ARG(0)), gstr(ARG(1)), true);
+    if (e && ARG(2)) ST32(ARG(2), guest_string(e->sval));
+    RET(e != NULL);
+}
+HLE_FUNC("_ZNK5movie9MediaData8FindRectEPKcPiS3_S3_S3_", md_find_rect) {
+    MediaData *m = md(ARG(0));
+    if (!m) { RET(0); return; }
+    const char *k = gstr(ARG(1));
+    MdEntry *w = NULL, *h = NULL;
+    for (int i = 0; i < m->n; i++) {
+        if (!strcmp(m->e[i].key, "width")) w = &m->e[i];
+        if (!strcmp(m->e[i].key, "height")) h = &m->e[i];
+    }
+    if (strcmp(k, "crop") || !w || !h) { RET(0); return; }
+    uint32_t right = STK(0), bottom = STK(1);
+    if (ARG(2)) ST32(ARG(2), 0);
+    if (ARG(3)) ST32(ARG(3), 0);
+    if (right) ST32(right, (uint32_t)(w->ival - 1));
+    if (bottom) ST32(bottom, (uint32_t)(h->ival - 1));
+    RET(1);
+}
+
+// ------------------------------------------------------------------ Buffer
 #define BUF_OFFSET 0x00
 #define BUF_SIZE 0x04
 #define BUF_OWNS 0x10
@@ -22,7 +130,7 @@ HLE_FUNC("_ZNK5movie9MediaData8FindRectEPKcPiS3_S3_S3_", md_find_rect) { RET(0);
 #define BUF_BYTES 0x24
 
 HLE_FUNC("_ZN5movie6BufferC1Ev", buf_ctor) { memset(ARGP(0), 0, BUF_BYTES); }
-HLE_FUNC("_ZN5movie6BufferC2Ev", buf_ctor2) { memset(ARGP(0), 0, BUF_BYTES); }
+HLE_FUNC("_ZN5movie6BufferC2Ev", buf_ctor2) { buf_ctor(c); }
 HLE_FUNC("_ZN5movie6BufferD1Ev", buf_dtor) { (void)c; }
 HLE_FUNC("_ZN5movie6BufferD2Ev", buf_dtor2) { (void)c; }
 HLE_FUNC("_ZNK5movie6Buffer4SizeEv", buf_size) { RET(LD32(ARG(0) + BUF_SIZE)); }
@@ -36,8 +144,6 @@ HLE_FUNC("_ZN5movie6Buffer18SetDataAndCapacityEPvj", buf_set_data) {
 
 HLE_FUNC("_ZN5movie12SetAllocatorEPFPvjjS0_EPFvS0_S0_EPFS0_S0_jS0_ES0_", movie_set_allocator) { LOG("[movie] SetAllocator\n"); RET(0); }
 HLE_FUNC("_ZN5movie11SetCoreMaskEy", movie_set_core_mask) { LOG("[movie] SetCoreMask %llx\n", (unsigned long long)ARG64(0)); RET(0); }
-
-#define MOVIE_EOS 4u
 
 static void stub_guest_event_op(Cpu *c, uint32_t event, const char *fn) {
     if (!event) return;
@@ -63,23 +169,59 @@ static uint32_t make_vtable(HostFn *fns, int n, int kind) {
 
 // Extractor stub methods
 static void stub_ex_set_data_source(Cpu *c) {
-    LOG("[movie] Extractor::SetDataSource: %s (movie playback disabled, skipping)\n",
+    LOG("[movie] Extractor::SetDataSource: %s -> stubbing instant EOS playback\n",
         ARG(1) ? (const char *)G2H(ARG(1)) : "(null)");
     RET(0);
 }
 
 static void stub_ex_get_track_count(Cpu *c) {
-    if (ARG(1)) ST32(ARG(1), 0);
-    LOG("[movie] Extractor::GetTrackCount -> 0 tracks\n");
+    if (ARG(1)) ST32(ARG(1), 2);
+    LOG("[movie] Extractor::GetTrackCount -> 2 tracks (video + audio)\n");
+    RET(0);
+}
+
+static void stub_ex_get_track_config(Cpu *c) {
+    int i = (int)ARG(1);
+    MediaData *m = md(ARG(2));
+    md_clear(m);
+    if (i == 0) {
+        md_set_str(m, "mime", "video/avc");
+        md_set_int(m, "width", 1920);
+        md_set_int(m, "height", 1080);
+        md_set_int(m, "frame-rate", 30);
+        md_set_int(m, "max-input-size", 4 << 20);
+        md_set_int(m, "durationUs", 1000000);
+    } else {
+        md_set_str(m, "mime", "audio/mp4a-latm");
+        md_set_int(m, "sample-rate", 48000);
+        md_set_int(m, "channel-count", 2);
+        md_set_int(m, "max-input-size", 256 << 10);
+        md_set_int(m, "durationUs", 1000000);
+    }
+    LOG("[movie] Extractor::GetTrackConfig track %d -> %s\n", i, i == 0 ? "video" : "audio");
     RET(0);
 }
 
 static void stub_ex_get_sample_track(Cpu *c) {
-    RET(0xFFFFFFFFu); // -1: no sample track
+    if (ARG(1)) ST32(ARG(1), 0);
+    RET(0);
+}
+
+static void stub_ex_read(Cpu *c) {
+    uint32_t b = ARG(1);
+    ST32(b + BUF_OFFSET, 0);
+    ST32(b + BUF_SIZE, 0);
+    RET(0);
 }
 
 static void stub_ex_get_sample_time(Cpu *c) {
     if (ARG(1)) { ST32(ARG(1), 0); ST32(ARG(1) + 4, 0); }
+    RET(0);
+}
+
+static void stub_ex_buffered_range(Cpu *c) {
+    if (ARG(1)) { ST32(ARG(1), 0); ST32(ARG(1) + 4, 0); }
+    if (ARG(2)) { ST32(ARG(2), 1000000); ST32(ARG(2) + 4, 0); }
     RET(0);
 }
 
@@ -90,8 +232,11 @@ HLE_FUNC("_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE", movie_extrac
         for (int i = 0; i < 16; i++) f[i] = stub_zero;
         f[2] = stub_ex_set_data_source;
         f[4] = stub_ex_get_track_count;
+        f[5] = stub_ex_get_track_config;
         f[9] = stub_ex_get_sample_track;
+        f[10] = stub_ex_read;
         f[12] = stub_ex_get_sample_time;
+        f[14] = stub_ex_buffered_range;
         f[15] = stub_ex_set_data_source;
         vt = make_vtable(f, 16, 0);
     }
@@ -106,6 +251,9 @@ HLE_FUNC("_ZN5movie9ExtractorC2ENS_13ContainerTypeENS_9CacheSizeE", movie_extrac
 // Decoder stub methods
 typedef struct {
     uint32_t events[4];
+    bool video;
+    bool started;
+    bool stopped;
 } StubDecoder;
 
 #define MAX_STUB_DECODERS 64
@@ -113,7 +261,11 @@ static StubDecoder g_stub_decoders[MAX_STUB_DECODERS];
 static int g_num_stub_decoders = 0;
 
 static void stub_dec_configure(Cpu *c) {
-    LOG("[movie] Decoder::Configure\n");
+    uint32_t h = LD32(ARG(0) + 4);
+    if (h > 0 && h <= MAX_STUB_DECODERS) {
+        StubDecoder *d = &g_stub_decoders[h - 1];
+        LOG("[movie] Decoder::Configure (%s)\n", d->video ? "video" : "audio");
+    }
     RET(0);
 }
 
@@ -122,17 +274,46 @@ static void stub_dec_register_events(Cpu *c) {
     if (h > 0 && h <= MAX_STUB_DECODERS && ARG(1)) {
         StubDecoder *d = &g_stub_decoders[h - 1];
         for (int i = 0; i < 4; i++) d->events[i] = LD32(ARG(1) + 4 * i);
-        LOG("[movie] Decoder::RegisterEvents [%x, %x, %x, %x]\n", d->events[0], d->events[1], d->events[2], d->events[3]);
+        LOG("[movie] Decoder::RegisterEvents (%s) [%x, %x, %x, %x]\n",
+            d->video ? "video" : "audio", d->events[0], d->events[1], d->events[2], d->events[3]);
+    }
+    RET(0);
+}
+
+static void stub_dec_format_fill(StubDecoder *d, MediaData *m) {
+    md_clear(m);
+    if (d->video) {
+        md_set_str(m, "mime", "video/raw");
+        md_set_int(m, "width", 1920);
+        md_set_int(m, "height", 1080);
+        md_set_int(m, "stride", 1920);
+        md_set_int(m, "color-format", 21); // NV12
+    } else {
+        md_set_str(m, "mime", "audio/raw");
+        md_set_int(m, "sample-rate", 48000);
+        md_set_int(m, "channel-count", 2);
+    }
+}
+
+static void stub_dec_get_output_format(Cpu *c) {
+    uint32_t h = LD32(ARG(0) + 4);
+    if (h > 0 && h <= MAX_STUB_DECODERS) {
+        stub_dec_format_fill(&g_stub_decoders[h - 1], md(ARG(1)));
     }
     RET(0);
 }
 
 static void stub_dec_start(Cpu *c) {
     uint32_t h = LD32(ARG(0) + 4);
-    LOG("[movie] Decoder::Start -> signalling events with EOS\n");
     if (h > 0 && h <= MAX_STUB_DECODERS) {
         StubDecoder *d = &g_stub_decoders[h - 1];
+        d->started = true;
+        LOG("[movie] Decoder::Start (%s) -> signalling format changed + buffers ready\n", d->video ? "video" : "audio");
+        // Event 2 = Format changed
+        if (d->events[2]) stub_guest_event_op(c, d->events[2], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+        // Event 0 = Input available
         if (d->events[0]) stub_guest_event_op(c, d->events[0], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+        // Event 1 = Output available
         if (d->events[1]) stub_guest_event_op(c, d->events[1], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
     }
     RET(0);
@@ -142,6 +323,8 @@ static void stub_dec_stop(Cpu *c) {
     uint32_t h = LD32(ARG(0) + 4);
     if (h > 0 && h <= MAX_STUB_DECODERS) {
         StubDecoder *d = &g_stub_decoders[h - 1];
+        d->stopped = true;
+        LOG("[movie] Decoder::Stop (%s)\n", d->video ? "video" : "audio");
         for (int i = 0; i < 4; i++) {
             if (d->events[i]) stub_guest_event_op(c, d->events[i], "_ZN2nn2os10ClearEventEPNS0_9EventTypeE");
         }
@@ -151,6 +334,19 @@ static void stub_dec_stop(Cpu *c) {
 
 static void stub_dec_acquire_input(Cpu *c) {
     if (ARG(1)) ST32(ARG(1), 0);
+    if (ARG(2)) ST32(ARG(2), 1);
+    RET(0);
+}
+
+static void stub_dec_get_input_buffer(Cpu *c) {
+    static uint32_t dummy_in;
+    if (!dummy_in) dummy_in = hle_alloc(64 * 1024);
+    uint32_t b = ARG(2);
+    ST32(b + BUF_DATA, dummy_in);
+    ST32(b + BUF_CAPACITY, 64 * 1024);
+    ST32(b + BUF_OFFSET, 0);
+    ST32(b + BUF_SIZE, 0);
+    *(uint8_t *)G2H(b + BUF_OWNS) = 0;
     RET(0);
 }
 
@@ -169,17 +365,53 @@ static void stub_dec_acquire_output(Cpu *c) {
     if (ARG(2)) { ST32(ARG(2), 0); ST32(ARG(2) + 4, 0); }
     if (ARG(3)) ST32(ARG(3), MOVIE_EOS); // Signal MOVIE_EOS (4) so movie player exits!
     if (STK(0)) ST32(STK(0), 0);
-    LOG("[movie] Decoder::AcquireOutputBuffer -> MOVIE_EOS (movie playback finished)\n");
     uint32_t h = LD32(ARG(0) + 4);
     if (h > 0 && h <= MAX_STUB_DECODERS) {
         StubDecoder *d = &g_stub_decoders[h - 1];
+        LOG("[movie] Decoder::AcquireOutputBuffer (%s) -> MOVIE_EOS (finishing movie playback)\n",
+            d->video ? "video" : "audio");
         if (d->events[1]) stub_guest_event_op(c, d->events[1], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
     }
     RET(0);
 }
 
+static void stub_dec_get_output_buffer(Cpu *c) {
+    uint32_t b = ARG(2);
+    ST32(b + BUF_OFFSET, 0);
+    ST32(b + BUF_SIZE, 0);
+    RET(0);
+}
+
 static void stub_dec_get_output_buffer_size(Cpu *c) {
-    if (ARG(2)) ST32(ARG(2), 0);
+    if (ARG(1)) ST32(ARG(1), 1920 * 1080 * 3 / 2);
+    if (ARG(2)) ST32(ARG(2), 4);
+    RET(0);
+}
+
+static void stub_dec_release_output(Cpu *c) {
+    uint32_t h = LD32(ARG(0) + 4);
+    if (h > 0 && h <= MAX_STUB_DECODERS) {
+        StubDecoder *d = &g_stub_decoders[h - 1];
+        if (d->events[0]) stub_guest_event_op(c, d->events[0], "_ZN2nn2os11SignalEventEPNS0_9EventTypeE");
+    }
+    RET(0);
+}
+
+static void stub_dec_get_output_buffer_md(Cpu *c) {
+    stub_dec_get_output_buffer(c);
+    uint32_t h = LD32(ARG(0) + 4);
+    if (ARG(3) && h > 0 && h <= MAX_STUB_DECODERS) {
+        stub_dec_format_fill(&g_stub_decoders[h - 1], md(ARG(3)));
+    }
+    RET(0);
+}
+
+static void stub_dec_get_output_buffer_format(Cpu *c) {
+    stub_dec_get_output_buffer(c);
+    uint32_t h = LD32(ARG(0) + 4);
+    if (ARG(2) && h > 0 && h <= MAX_STUB_DECODERS) {
+        stub_dec_format_fill(&g_stub_decoders[h - 1], md(ARG(2)));
+    }
     RET(0);
 }
 
@@ -190,20 +422,28 @@ HLE_FUNC("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11Dec
         for (int i = 0; i < 19; i++) f[i] = stub_zero;
         f[2] = stub_dec_configure;
         f[3] = stub_dec_register_events;
+        f[4] = stub_dec_get_output_format;
         f[5] = stub_dec_start;
         f[6] = stub_dec_stop;
         f[9] = stub_dec_acquire_input;
+        f[10] = stub_dec_get_input_buffer;
         f[11] = stub_dec_send_input;
         f[12] = stub_dec_acquire_output;
+        f[13] = stub_dec_get_output_buffer;
         f[14] = stub_dec_get_output_buffer_size;
+        f[15] = stub_dec_release_output;
+        f[17] = stub_dec_get_output_buffer_md;
+        f[18] = stub_dec_get_output_buffer_format;
         vt = make_vtable(f, 19, 1);
     }
     int id = (g_num_stub_decoders % MAX_STUB_DECODERS) + 1;
     g_num_stub_decoders++;
-    memset(&g_stub_decoders[id - 1], 0, sizeof(StubDecoder));
+    StubDecoder *d = &g_stub_decoders[id - 1];
+    memset(d, 0, sizeof(StubDecoder));
+    d->video = (ARG(1) == 0); // DecoderType: 0 = video, 1 = audio
     ST32(ARG(0), vt);
     ST32(ARG(0) + 4, (uint32_t)id);
-    LOG("[movie] Decoder created (stub id %d)\n", id);
+    LOG("[movie] Decoder created (%s, stub id %d)\n", d->video ? "video" : "audio", id);
 }
 HLE_FUNC("_ZN5movie7DecoderC2ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeE", movie_decoder_ctor2) {
     movie_decoder_ctor(c);

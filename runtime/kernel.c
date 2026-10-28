@@ -121,14 +121,18 @@ void kernel_map_region(uint32_t addr, uint32_t size, uint32_t type, uint32_t per
     pthread_mutex_unlock(&g_klock);
 }
 
-bool kernel_mapped(uint64_t addr, uint32_t size) {
+static bool kernel_mapped_locked(uint64_t addr, uint32_t size) {
     if (addr + size > GUEST_SPACE || addr + size < addr) return false;
-    bool ok = false;
-    pthread_mutex_lock(&g_klock);
     for (int i = 0; i < nregions; i++) {
         Region *r = &regions[i];
-        if (addr >= r->addr && addr + size <= r->addr + (uint64_t)r->size) { ok = true; break; }
+        if (addr >= r->addr && addr + size <= r->addr + (uint64_t)r->size) return true;
     }
+    return false;
+}
+
+bool kernel_mapped(uint64_t addr, uint32_t size) {
+    pthread_mutex_lock(&g_klock);
+    bool ok = kernel_mapped_locked(addr, size);
     pthread_mutex_unlock(&g_klock);
     return ok;
 }
@@ -362,8 +366,7 @@ static uint32_t svc_wait_process_wide_key(uint32_t mutex, uint32_t key, uint32_t
     return r;
 }
 
-static void svc_signal_process_wide_key(uint32_t key, int32_t count) {
-    pthread_mutex_lock(&g_klock);
+static void signal_process_wide_key_locked(uint32_t key, int32_t count) {
     int woken = 0;
     bool any_left = false;
     for (;;) {
@@ -386,6 +389,11 @@ static void svc_signal_process_wide_key(uint32_t key, int32_t count) {
     for (KThread *t = g_waitlist; t; t = t->wnext)
         if (t->wait_kind == WAIT_CONDVAR && t->wait_addr == key) any_left = true;
     if (!any_left) __atomic_store_n(u32p(key), 0, __ATOMIC_SEQ_CST);
+}
+
+static void svc_signal_process_wide_key(uint32_t key, int32_t count) {
+    pthread_mutex_lock(&g_klock);
+    signal_process_wide_key_locked(key, count);
     pthread_mutex_unlock(&g_klock);
 }
 
@@ -757,6 +765,10 @@ static void *dump_threads(void *arg) {
         plat_sleep_until_ns(plat_now_ns() + (uint64_t)secs * 1000000000ull);
         secs = 3;
         static const char *const kinds[] = {"running", "mutex", "condvar", "arbiter"};
+        static int movie_hang_dumps = 0;
+        bool movie_thread_waiting = false;
+        KThread *movie_thread = NULL;
+
         pthread_mutex_lock(&g_klock);
         LOG("[threads] ---- dump\n");
         for (KThread *t = g_threads; t; t = t->anext) {
@@ -780,12 +792,46 @@ static void *dump_threads(void *arg) {
                     if ((ins & 0x0F000000u) != 0x0B000000u && (ins & 0xFE000000u) != 0xFA000000u &&
                         (ins & 0x0FFFFFF0u) != 0x012FFF30u)
                         continue;
+                    if (v == 0xdbd994u) {
+                        movie_thread_waiting = true;
+                        movie_thread = t;
+                    }
                     n += snprintf(line + n, sizeof line - n, " %x", v);
                     k++;
                 }
                 LOG("[threads]     callers:%s\n", line);
             }
         }
+
+        if (movie_thread_waiting && movie_thread && movie_thread->wait_kind == WAIT_CONDVAR && movie_thread->wait_addr >= 0x10000000) {
+            movie_hang_dumps++;
+            if (movie_hang_dumps >= 2) {
+                uint32_t cv_addr = movie_thread->wait_addr;
+                uint32_t event_1 = cv_addr - 0x18;
+                uint32_t obj = event_1 - 0x1c4;
+                uint32_t event_2 = obj + 0x1e0;
+                uint32_t stop_flag = obj + 0x202;
+                LOG("[watchdog] Movie playback hang detected on thread %llu (dumps=%d, obj=%x, cv=%x)! Forcing EOS...\n",
+                    (unsigned long long)movie_thread->id, movie_hang_dumps, obj, cv_addr);
+                if (kernel_mapped_locked(stop_flag, 1)) {
+                    *(uint8_t *)G2H(stop_flag) = 1;
+                }
+                if (kernel_mapped_locked(event_1, 32)) {
+                    *(uint8_t *)G2H(event_1 + 8) = 1;
+                }
+                if (kernel_mapped_locked(event_2, 32)) {
+                    *(uint8_t *)G2H(event_2 + 8) = 1;
+                }
+                signal_process_wide_key_locked(cv_addr, -1);
+                signal_process_wide_key_locked(event_2 + 0x18, -1);
+                signal_process_wide_key_locked(event_1, -1);
+                signal_process_wide_key_locked(event_2, -1);
+                movie_hang_dumps = 0;
+            }
+        } else {
+            movie_hang_dumps = 0;
+        }
+
         pthread_mutex_unlock(&g_klock);
     }
     return NULL;
