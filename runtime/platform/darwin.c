@@ -609,7 +609,10 @@ void plat_fatal_notice(void) {
 #if defined(__APPLE__)
 #include "../textinput.h"
 
-static __weak UIAlertController *s_active_text_alert = nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
+static UIAlertController *s_active_text_alert = nil;
 
 void plat_ios_show_text_input(const char *title, const char *initial, int max_chars) {
     (void)max_chars;
@@ -692,6 +695,8 @@ void plat_ios_dismiss_text_input(void) {
         }
     });
 }
+
+#pragma clang diagnostic pop
 #else
 void plat_ios_show_text_input(const char *title, const char *initial, int max_chars) {
     (void)title; (void)initial; (void)max_chars;
