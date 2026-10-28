@@ -7,8 +7,8 @@
 #include "cpu.h"
 #include "platform.h"
 
-#define LOG(...) fprintf(stderr, __VA_ARGS__)
-#define FATAL(...) (fprintf(stderr, "FATAL: " __VA_ARGS__), rt_fatal_trace())
+#define LOG(...) (fprintf(stderr, __VA_ARGS__), fflush(stderr))
+#define FATAL(...) (fprintf(stderr, "FATAL: " __VA_ARGS__), fflush(stderr), rt_fatal_trace())
 
 // ---- guest address space (32-bit; host address = GUEST_BASE + guest address)
 // Layout of the process as this runtime's kernel presents it (GetInfo / QueryMemory agree with it). The modules

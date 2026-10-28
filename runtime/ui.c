@@ -73,9 +73,6 @@ void ui_init(void) {
     fit_desktop(&win_w, &win_h);
 #endif
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-#ifdef __APPLE__
-    flags |= SDL_WINDOW_FULLSCREEN;
-#endif
 #ifndef MHGU_NULL_BACKEND
     flags |= SDL_WINDOW_VULKAN;
 #endif

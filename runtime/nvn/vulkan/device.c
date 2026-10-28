@@ -79,12 +79,17 @@ static void create_instance(void) {
     bool validate = getenv("MHGU_VK_VALIDATION") != NULL;
     if (validate) ext[n_ext++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 #ifdef __APPLE__
+    bool has_portability_enum = false;
     uint32_t n_avail = 0;
-    vkEnumerateInstanceExtensionProperties(NULL, &n_avail, NULL);
-    VkExtensionProperties *avail = calloc(n_avail, sizeof *avail);
-    vkEnumerateInstanceExtensionProperties(NULL, &n_avail, avail);
-    bool has_portability_enum = has_ext(avail, n_avail, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
-    free(avail);
+    if (vkEnumerateInstanceExtensionProperties(NULL, &n_avail, NULL) == VK_SUCCESS && n_avail > 0) {
+        VkExtensionProperties *avail = calloc(n_avail, sizeof *avail);
+        if (avail) {
+            if (vkEnumerateInstanceExtensionProperties(NULL, &n_avail, avail) == VK_SUCCESS) {
+                has_portability_enum = has_ext(avail, n_avail, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+            }
+            free(avail);
+        }
+    }
     if (has_portability_enum) ext[n_ext++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
 #endif
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
@@ -96,6 +101,8 @@ static void create_instance(void) {
 #ifdef __APPLE__
     if (has_portability_enum) ci.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
+    LOG("[vk] creating instance with %u extensions (flags=0x%x):\n", n_ext, ci.flags);
+    for (uint32_t i = 0; i < n_ext; i++) LOG("[vk]   ext[%u]: %s\n", i, ext[i]);
     VkResult r = vkCreateInstance(&ci, NULL, &g_vk.inst);
     if (r != VK_SUCCESS && validate) {
         LOG("[vk] validation layer unavailable (%d); continuing without\n", r);
@@ -350,13 +357,20 @@ static void create_swapchain(void) {
     uint32_t count = caps.minImageCount + 1 < 3 ? 3 : caps.minImageCount + 1;
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
     if (count > 8) count = 8;
+    VkCompositeAlphaFlagBitsKHR composite = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    if (!(caps.supportedCompositeAlpha & composite)) {
+        if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR)
+            composite = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+        else if (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR)
+            composite = VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR;
+    }
     VkSwapchainKHR old = g_vk.swapchain;
     VkSwapchainCreateInfoKHR ci = {
         .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR, .surface = g_vk.surface, .minImageCount = count,
         .imageFormat = sf.format, .imageColorSpace = sf.colorSpace, .imageExtent = ext, .imageArrayLayers = 1,
         .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE, .preTransform = caps.currentTransform,
-        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, .presentMode = present_mode(), .clipped = VK_TRUE,
+        .compositeAlpha = composite, .presentMode = present_mode(), .clipped = VK_TRUE,
         .oldSwapchain = old};
     VK_CHECK(vkCreateSwapchainKHR(g_vk.dev, &ci, NULL, &g_vk.swapchain));
     for (uint32_t i = 0; i < g_vk.sc_count; i++) {

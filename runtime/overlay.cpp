@@ -28,7 +28,7 @@ static void ImGui_ImplVulkan_UpdateTexture(ImTextureData *) {}
 #include "forge.h"
 #include "overlay.h"
 
-#define LOG(...) fprintf(stderr, __VA_ARGS__)
+#define LOG(...) (fprintf(stderr, __VA_ARGS__), fflush(stderr))
 
 extern "C" {
 void vk_lock(void);

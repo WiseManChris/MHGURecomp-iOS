@@ -2,6 +2,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <execinfo.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <mach-o/dyld.h>
 #include <pthread.h>
@@ -249,9 +250,11 @@ void plat_setup_ios_documents(void) {
         static bool s_log_opened = false;
         if (!s_log_opened) {
             NSString *logPath = [docPath stringByAppendingPathComponent:@"log.txt"];
-            if (freopen([logPath UTF8String], "a", stderr)) {
+            FILE *fp = freopen([logPath UTF8String], "w", stderr);
+            if (fp) {
                 setvbuf(stderr, NULL, _IONBF, 0);
                 dup2(fileno(stderr), STDOUT_FILENO);
+                setvbuf(stdout, NULL, _IONBF, 0);
                 g_own_log = true;
                 s_log_opened = true;
             }
@@ -259,7 +262,9 @@ void plat_setup_ios_documents(void) {
 
         // 6. Set working directory to Documents
         chdir([docPath UTF8String]);
+        fprintf(stderr, "=== MHGU Recomp iOS Startup ===\n");
         fprintf(stderr, "[plat] Documents initialized at: %s\n", [docPath UTF8String]);
+        fflush(stderr);
     }
 }
 
@@ -428,7 +433,7 @@ void plat_show_missing_files_screen(const char *main_path, const char *doc_path)
     @autoreleasepool {
         SDL_Init(SDL_INIT_VIDEO);
 
-        SDL_Window *win = SDL_CreateWindow("MHGU Recomp", 1920, 1080, SDL_WINDOW_FULLSCREEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        SDL_Window *win = SDL_CreateWindow("MHGU Recomp", 1920, 1080, SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (!win) win = SDL_CreateWindow("MHGU Recomp", 1280, 720, 0);
 
         UIWindow *targetWindow = nil;
@@ -441,11 +446,11 @@ void plat_show_missing_files_screen(const char *main_path, const char *doc_path)
         vc.mainPath = [NSString stringWithUTF8String:main_path];
         vc.docPath = doc_path ? [NSString stringWithUTF8String:doc_path] : nil;
 
-        UIViewController *origRoot = nil;
         UIWindow *standaloneWindow = nil;
         if (targetWindow) {
-            origRoot = targetWindow.rootViewController;
-            targetWindow.rootViewController = vc;
+            vc.view.frame = targetWindow.bounds;
+            vc.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            [targetWindow addSubview:vc.view];
         } else {
             UIWindowScene *activeScene = nil;
             if (@available(iOS 13.0, *)) {
@@ -482,8 +487,8 @@ void plat_show_missing_files_screen(const char *main_path, const char *doc_path)
             }
         }
 
-        if (targetWindow && origRoot) {
-            targetWindow.rootViewController = origRoot;
+        if (targetWindow) {
+            [vc.view removeFromSuperview];
         }
         if (standaloneWindow) {
             standaloneWindow.hidden = YES;
@@ -491,7 +496,6 @@ void plat_show_missing_files_screen(const char *main_path, const char *doc_path)
         }
         if (win) {
             SDL_DestroyWindow(win);
-            SDL_QuitSubSystem(SDL_INIT_VIDEO);
         }
     }
 }
@@ -550,7 +554,14 @@ bool plat_user_dir(char *buf, size_t size) {
 
 void plat_error_box(const char *msg) {
     fprintf(stderr, "\n*** %s\n", msg);
+    fflush(stderr);
+#if defined(__APPLE__)
+    if (ui_window()) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "MHGU Recomp", msg, ui_window());
+    }
+#else
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "MHGU Recomp", msg, NULL);
+#endif
 }
 
 void plat_fatal_notice(void) {
@@ -595,6 +606,7 @@ static const char *sig_name(int sig) {
     case SIGBUS: return "SIGBUS";
     case SIGFPE: return "SIGFPE";
     case SIGILL: return "SIGILL";
+    case SIGABRT: return "SIGABRT";
     default: return "signal";
     }
 }
@@ -605,18 +617,28 @@ static void fault_handler(int sig, siginfo_t *si, void *uc) {
     if ((sig == SIGSEGV || sig == SIGBUS) && lazy_commit(fa)) return;
 
 #if defined(__arm64__) || defined(__aarch64__)
-    uint64_t pc = (uint64_t)ctx->uc_mcontext->__ss.__pc;
-    uint64_t sp = (uint64_t)ctx->uc_mcontext->__ss.__sp;
-    uint64_t lr = (uint64_t)ctx->uc_mcontext->__ss.__lr;
+    uint64_t pc = (ctx && ctx->uc_mcontext) ? (uint64_t)ctx->uc_mcontext->__ss.__pc : 0;
+    uint64_t sp = (ctx && ctx->uc_mcontext) ? (uint64_t)ctx->uc_mcontext->__ss.__sp : 0;
+    uint64_t lr = (ctx && ctx->uc_mcontext) ? (uint64_t)ctx->uc_mcontext->__ss.__lr : 0;
 #elif defined(__x86_64__)
-    uint64_t pc = (uint64_t)ctx->uc_mcontext->__ss.__rip;
-    uint64_t sp = (uint64_t)ctx->uc_mcontext->__ss.__rsp;
+    uint64_t pc = (ctx && ctx->uc_mcontext) ? (uint64_t)ctx->uc_mcontext->__ss.__rip : 0;
+    uint64_t sp = (ctx && ctx->uc_mcontext) ? (uint64_t)ctx->uc_mcontext->__ss.__rsp : 0;
     uint64_t lr = 0;
     uint64_t end = 0;
     if (plat_committed(sp, &end) && end - sp >= 8) lr = *(const uint64_t *)(uintptr_t)sp;
 #else
     uint64_t pc = 0, sp = 0, lr = 0;
 #endif
+
+    int crash_fd = open("CRASH.txt", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (crash_fd >= 0) {
+        char buf[256];
+        int len = snprintf(buf, sizeof(buf), "FATAL SIGNAL: %s (%d) at address 0x%llx\npc=0x%llx, lr=0x%llx, sp=0x%llx\n",
+                           sig_name(sig), sig, (unsigned long long)fa,
+                           (unsigned long long)pc, (unsigned long long)lr, (unsigned long long)sp);
+        write(crash_fd, buf, len);
+        close(crash_fd);
+    }
 
     char what[80];
     snprintf(what, sizeof what, "%s (code %d, addr %llx)", sig_name(sig), si ? si->si_code : 0,
@@ -636,4 +658,5 @@ void plat_crash_handler_install(void) {
     sigemptyset(&sa.sa_mask);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGILL, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
 }
