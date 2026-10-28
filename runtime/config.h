@@ -36,6 +36,7 @@ typedef struct {
     float fov;                // 3D camera field of view factor (1: the game's)
     int ui_anchor;            // where the HUD goes on a picture wider than 16:9: UI_*
     int background_input;     // the controller keeps working while the window is in the background (runtime/ui.c)
+    int stretch;              // 1: stretch to fill entire screen (no letterboxing), 0: maintain aspect ratio
 } Config;
 enum { UI_CENTER = 1, UI_21_9, UI_32_9, UI_EDGES };  // the middle 16:9, 21:9, 32:9, the picture's sides
 

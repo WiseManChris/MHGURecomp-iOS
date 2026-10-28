@@ -78,8 +78,20 @@ void ui_init(void) {
     win_w = g_config.width, win_h = g_config.height;
 #ifndef __APPLE__
     fit_desktop(&win_w, &win_h);
+#else
+    // On iOS/iPadOS, query the screen display mode directly to get full display size in points
+    const SDL_DisplayMode *dm = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
+    if (!dm) dm = SDL_GetDesktopDisplayMode(SDL_GetPrimaryDisplay());
+    if (dm && dm->w > 0 && dm->h > 0) {
+        win_w = dm->w;
+        win_h = dm->h;
+    }
 #endif
     SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+#if defined(__APPLE__)
+    // On iOS, force borderless fullscreen so the view fills the entire iPad screen natively
+    flags |= SDL_WINDOW_BORDERLESS | SDL_WINDOW_FULLSCREEN;
+#endif
 #ifndef MHGU_NULL_BACKEND
     flags |= SDL_WINDOW_VULKAN;
 #endif

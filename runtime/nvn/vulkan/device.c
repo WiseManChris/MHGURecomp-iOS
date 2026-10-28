@@ -580,9 +580,17 @@ void backend_present(NvnTexture *t) {
     vk_end_pass();
     vk_ms_resolve(b);
     if (frame_begin()) {
-        // the game's image, as large as fits with its aspect ratio, centred
-        double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height, s = fmin(ww / t->width, wh / t->height);
-        double vw = t->width * s, vh = t->height * s;
+        // the game's image, as large as fits with its aspect ratio, centred (or stretched to fill screen)
+        double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height;
+        double vw, vh;
+        if (g_config.stretch) {
+            vw = ww;
+            vh = wh;
+        } else {
+            double s = fmin(ww / t->width, wh / t->height);
+            vw = t->width * s;
+            vh = t->height * s;
+        }
         vk_present_draw(vk_cmd(), b, (float)((ww - vw) / 2), (float)((wh - vh) / 2), (float)vw, (float)vh);
         OverlayTarget ot = {g_vk.inst, g_vk.phys, g_vk.dev, g_vk.qfam, g_vk.queue, g_vk.pcache, sc_pass,
                             g_vk.sc_extent.width, g_vk.sc_extent.height};

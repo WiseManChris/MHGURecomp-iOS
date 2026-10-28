@@ -606,6 +606,99 @@ void plat_fatal_notice(void) {
     }
 }
 
+#if defined(__APPLE__)
+#include "../textinput.h"
+
+static __weak UIAlertController *s_active_text_alert = nil;
+
+void plat_ios_show_text_input(const char *title, const char *initial, int max_chars) {
+    (void)max_chars;
+    NSString *nsTitle = (title && *title) ? [NSString stringWithUTF8String:title] : @"Character Name";
+    NSString *nsInitial = (initial && *initial) ? [NSString stringWithUTF8String:initial] : @"Hunter";
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIWindow *keyWin = nil;
+        if (@available(iOS 13.0, *)) {
+            for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    UIWindowScene *ws = (UIWindowScene *)scene;
+                    for (UIWindow *w in ws.windows) {
+                        if (w.isKeyWindow) { keyWin = w; break; }
+                    }
+                    if (keyWin) break;
+                }
+            }
+        }
+        if (!keyWin) {
+            for (UIWindow *w in [UIApplication sharedApplication].windows) {
+                if (w.isKeyWindow) { keyWin = w; break; }
+            }
+        }
+        if (!keyWin) keyWin = [UIApplication sharedApplication].windows.firstObject;
+
+        UIViewController *topVC = keyWin.rootViewController;
+        while (topVC.presentedViewController) {
+            topVC = topVC.presentedViewController;
+        }
+        if (!topVC) return;
+
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:nsTitle
+                                                                       message:@"Enter a name or press OK / Return on keyboard / Start on controller:"
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        s_active_text_alert = alert;
+
+        [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+            textField.text = nsInitial;
+            textField.placeholder = @"Hunter";
+            textField.autocapitalizationType = UITextAutocapitalizationTypeWords;
+            textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+            textField.returnKeyType = UIReturnKeyDone;
+        }];
+
+        UIAlertAction *okAction = [UIAlertAction actionWithTitle:@"OK"
+                                                           style:UIAlertActionStyleDefault
+                                                         handler:^(UIAlertAction * _Nonnull action) {
+            s_active_text_alert = nil;
+            UITextField *tf = alert.textFields.firstObject;
+            NSString *text = tf.text;
+            if (!text || text.length == 0) text = @"Hunter";
+            const char *utf8 = [text UTF8String];
+            textinput_set(utf8);
+            textinput_key(TI_ENTER);
+        }];
+
+        UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"Cancel"
+                                                               style:UIAlertActionStyleCancel
+                                                             handler:^(UIAlertAction * _Nonnull action) {
+            s_active_text_alert = nil;
+            textinput_key(TI_CANCEL);
+        }];
+
+        [alert addAction:okAction];
+        [alert addAction:cancelAction];
+
+        [topVC presentViewController:alert animated:YES completion:^{
+            UITextField *tf = alert.textFields.firstObject;
+            [tf becomeFirstResponder];
+        }];
+    });
+}
+
+void plat_ios_dismiss_text_input(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (s_active_text_alert) {
+            [s_active_text_alert dismissViewControllerAnimated:YES completion:nil];
+            s_active_text_alert = nil;
+        }
+    });
+}
+#else
+void plat_ios_show_text_input(const char *title, const char *initial, int max_chars) {
+    (void)title; (void)initial; (void)max_chars;
+}
+void plat_ios_dismiss_text_input(void) {}
+#endif
+
 // ---- diagnostics
 const char *plat_symbol(uint64_t pc, uint64_t *offset) {
     static __thread char name[PATH_MAX], exe[PATH_MAX];

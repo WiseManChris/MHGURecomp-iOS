@@ -34,10 +34,20 @@ void textinput_begin(const char *initial, int max_chars) {
     g_active = true;
     g_max_chars = max_chars;
     g_event = TI_NONE;
-    snprintf(g_text, sizeof g_text, "%s", initial ? initial : "");
+    const char *def = (initial && *initial) ? initial : "Hunter";
+    snprintf(g_text, sizeof g_text, "%s", def);
     pthread_mutex_unlock(&g_lock);
     LOG("[textinput] text entry (up to %d characters, \"%s\"): type, Enter confirms, Escape cancels\n", max_chars,
-        initial ? initial : "");
+        def);
+}
+
+void textinput_set(const char *s) {
+    pthread_mutex_lock(&g_lock);
+    if (g_active) {
+        snprintf(g_text, sizeof g_text, "%s", s ? s : "");
+        post(TI_CHANGED);
+    }
+    pthread_mutex_unlock(&g_lock);
 }
 
 void textinput_end(void) {
@@ -45,6 +55,10 @@ void textinput_end(void) {
     g_active = false;
     g_event = TI_NONE;
     pthread_mutex_unlock(&g_lock);
+#if defined(__APPLE__)
+    void plat_ios_dismiss_text_input(void);
+    plat_ios_dismiss_text_input();
+#endif
 }
 
 int textinput_poll(char *out, size_t size, int *chars) {

@@ -117,7 +117,13 @@ HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard6AppearERKNS0_9AppearArgE", ik_appear) {
     LOG("[swkbd] inline keyboard shown (frame %llu), AppearArg%s\n", (unsigned long long)g_present_count, hex);
     ik_state = 3;
     ik_auto = getenv("MHGU_NAME") || getenv("MHGU_INLINE_CANCEL") ? 1 : 0;
-    if (!ik_auto) textinput_begin(ik_initial, max);
+    if (!ik_auto) {
+        textinput_begin(ik_initial, max);
+#if defined(__APPLE__)
+        void plat_ios_show_text_input(const char *title, const char *initial, int max_chars);
+        plat_ios_show_text_input("Hunter Name", ik_initial[0] ? ik_initial : "Hunter", max);
+#endif
+    }
 }
 HLE_FUNC("_ZN2nn5swkbd14InlineKeyboard9DisappearEv", ik_disappear) {
     if (ik_state == 3) LOG("[swkbd] inline keyboard closed by the game\n");

@@ -17,4 +17,5 @@ bool textinput_active(void);
 bool textinput_event(const union SDL_Event *e);  // true: the event was typing (not for the controller mapping)
 void textinput_update(void);                     // each loop pass: the window's text input on / off to match
 void textinput_type(const char *utf8);           // as typed (MHGU_CONTROL "type", paste)
+void textinput_set(const char *utf8);            // directly replace entry text (e.g. from native iOS alert)
 void textinput_key(int what);                    // TI_ENTER, TI_CANCEL, or TI_NONE for Backspace
