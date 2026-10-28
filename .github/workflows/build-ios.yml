@@ -20,7 +20,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: deps
-          key: ios-deps-macos-14-deps-v1
+          key: ios-deps-macos-14-deps-v2
 
       - name: Setup iOS Dependencies (MoltenVK, SDL3, Shaderc)
         if: steps.cache-deps.outputs.cache-hit != 'true'
@@ -29,7 +29,7 @@ jobs:
           NCPU=$(sysctl -n hw.ncpu)
 
           echo "=== 1. Downloading MoltenVK for iOS ==="
-          curl -fL -o MoltenVK-ios.tar https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-ios.tar
+          curl -fL -o MoltenVK-ios.tar https://github.com/KhronosGroup/MoltenVK/releases/download/v1.3.0/MoltenVK-ios.tar
           tar -xf MoltenVK-ios.tar
           cp MoltenVK/MoltenVK/static/MoltenVK.xcframework/ios-arm64/libMoltenVK.a deps/lib/libMoltenVK.a
           cp -r MoltenVK/MoltenVK/include/* deps/include/

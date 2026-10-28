@@ -49,6 +49,8 @@
 	<true/>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
 	<key>LSSupportsGameMode</key>
 	<true/>
 	<key>GCSupportsControllerUserInteraction</key>

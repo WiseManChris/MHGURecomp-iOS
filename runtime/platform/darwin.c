@@ -24,20 +24,6 @@
 
 #if defined(__APPLE__)
 #import <Foundation/Foundation.h>
-
-// Fallback Objective-C class stub for Metal 3.2 MTLResidencySetDescriptor.
-// libMoltenVK references _OBJC_CLASS_$_MTLResidencySetDescriptor. Providing a full
-// Objective-C class ensures that objc_msgSend finds a valid class structure with
-// valid isa and cache offsets (avoiding NULL class dereference crashes at 0x1e).
-@interface MTLResidencySetDescriptor : NSObject
-@property (nonatomic, copy) NSString *label;
-@property (nonatomic, assign) NSUInteger initialCapacity;
-@end
-
-@implementation MTLResidencySetDescriptor
-@synthesize label = _label;
-@synthesize initialCapacity = _initialCapacity;
-@end
 #endif
 
 // ---- guest address space

@@ -84,7 +84,7 @@ GAMELIB_LDFLAGS := -shared -fuse-ld=lld -static-libgcc $(O)/mhgurecomp.dll.a
 else ifeq ($(PLATFORM),darwin)
 DEPS     ?= deps
 SDKROOT  ?= $(shell xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
-ARCH_FLAGS ?= -target arm64-apple-ios14.0 -isysroot $(SDKROOT)
+ARCH_FLAGS ?= -target arm64-apple-ios15.0 -isysroot $(SDKROOT)
 CC       := xcrun --sdk iphoneos clang $(ARCH_FLAGS)
 CXX      := xcrun --sdk iphoneos clang++ $(ARCH_FLAGS)
 GENARCH  ?=
