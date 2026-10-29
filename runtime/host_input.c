@@ -30,7 +30,10 @@
 #define B(x) (1ull << (x))
 
 static bool keys[SDL_SCANCODE_COUNT];
-static SDL_Gamepad *pad;
+static SDL_Gamepad *pad;  // the controller read: of those open, the one a button was last pressed on
+#define MAX_PADS 8
+static struct { SDL_Gamepad *pad; uint64_t opened_ns; } pads[MAX_PADS];
+static int npads;
 
 static const struct { SDL_Scancode sc; int btn; } key_buttons[] = {
     // Face buttons: Nintendo layout (A right, B bottom, X top, Y left) - matching nxnative front_mac/front_ios
@@ -365,14 +368,47 @@ static void log_pad(SDL_JoystickID id, const char *tag) {
         SDL_GetGamepadProductForID(id), SDL_GetGamepadMappingForID(id) ? "known" : "NONE (SDL guesses the buttons)");
 }
 
-static void open_pad(SDL_JoystickID id) {
-    if (pad) { log_pad(id, "gamepad appeared, keeping the one in use"); return; }
-    if (!pad_matches(id)) { log_pad(id, "gamepad skipped (MHGU_PAD)"); return; }
-    pad = SDL_OpenGamepad(id);
-    if (pad) log_pad(id, "gamepad in use");
+static int find_pad(SDL_JoystickID id) {
+    for (int i = 0; i < npads; i++)
+        if (SDL_GetGamepadID(pads[i].pad) == id) return i;
+    return -1;
 }
 
-static void pick_pad(void) {  // over every controller SDL sees now: MHGU_PAD picks, else the first
+static void open_pad(SDL_JoystickID id) {
+    if (find_pad(id) >= 0) return;
+    if (!pad_matches(id)) { log_pad(id, "gamepad skipped (MHGU_PAD)"); return; }
+    if (npads == MAX_PADS) { log_pad(id, "gamepad skipped (too many)"); return; }
+    SDL_Gamepad *p = SDL_OpenGamepad(id);
+    if (!p) { LOG("[input] gamepad %u failed to open: %s\n", (unsigned)id, SDL_GetError()); return; }
+    pads[npads].pad = p, pads[npads++].opened_ns = plat_now_ns();
+    if (!pad) pad = p, log_pad(id, "gamepad in use");
+    else log_pad(id, "gamepad open too (a button pressed on it makes it the one in use)");
+}
+
+// A button pressed on another open controller: that one is read from now on. Not in the first half second after it
+// opened (a device whose buttons read as held sends their presses then, and would take over at startup).
+static void pad_pressed(SDL_JoystickID id) {
+    int i = find_pad(id);
+    if (i < 0 || pads[i].pad == pad || plat_now_ns() - pads[i].opened_ns < 500000000ull) return;
+    pad = pads[i].pad;
+    log_pad(id, "gamepad in use (a button pressed on it)");
+}
+
+static void close_pad(SDL_JoystickID id) {
+    int i = find_pad(id);
+    if (i < 0) return;
+    bool was = pads[i].pad == pad;
+    const char *name = SDL_GetGamepadName(pads[i].pad);
+    LOG("[input] gamepad removed%s: %s\n", was ? " (it was in use)" : "", name ? name : "?");
+    SDL_CloseGamepad(pads[i].pad);
+    pads[i] = pads[--npads];
+    if (was) {
+        pad = npads ? pads[0].pad : NULL;
+        if (pad) log_pad(SDL_GetGamepadID(pad), "gamepad in use");
+    }
+}
+
+static void pick_pad(void) {  // over every controller SDL sees now: those MHGU_PAD allows (all without it), first in use
     int n = 0;
     SDL_JoystickID *ids = SDL_GetGamepads(&n);
     for (int i = 0; i < n; i++) open_pad(ids[i]);
@@ -380,6 +416,7 @@ static void pick_pad(void) {  // over every controller SDL sees now: MHGU_PAD pi
 }
 
 void host_input_event(const SDL_Event *e) {
+    if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) pad_pressed(e->gbutton.which);
     if (overlay_event(e)) return;  // (Forge's menu open: keyboard and mouse are its)
     if (textinput_event(e)) return;  // (typing into a text entry: not controller buttons)
     switch (e->type) {
@@ -422,9 +459,21 @@ void host_input_event(const SDL_Event *e) {
     case SDL_EVENT_MOUSE_MOTION:
         if (mouse_captured) mouse_dx += e->motion.xrel, mouse_dy += e->motion.yrel;
         break;
-    case SDL_EVENT_FINGER_DOWN:
+    case SDL_EVENT_FINGER_DOWN: {
+        static uint64_t last_tap_ns;
+        uint64_t now_ns = plat_now_ns();
+        // Top-right corner double-tap toggles Forge menu on iPad
+        if (e->tfinger.x > 0.82f && e->tfinger.y < 0.18f) {
+            if (now_ns - last_tap_ns < 400000000ull) {
+                overlay_toggle_menu();
+                last_tap_ns = 0;
+            } else {
+                last_tap_ns = now_ns;
+            }
+        }
         mouse_buttons |= B(BTN_A);
         break;
+    }
     case SDL_EVENT_FINGER_UP:
         mouse_buttons &= ~B(BTN_A);
         break;
@@ -446,19 +495,18 @@ void host_input_event(const SDL_Event *e) {
         break;
     }
     case SDL_EVENT_WINDOW_FOCUS_LOST:
+        config_window_focus(0);
         memset(keys, 0, sizeof keys);
         mouse_buttons = 0, mouse_grab = false;
+        break;
+    case SDL_EVENT_WINDOW_FOCUS_GAINED:
+        config_window_focus(1);
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         open_pad(e->gdevice.which);
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
-        if (pad && SDL_GetGamepadID(pad) == e->gdevice.which) {
-            log_pad(e->gdevice.which, "gamepad removed");
-            SDL_CloseGamepad(pad);
-            pad = NULL;
-            pick_pad();
-        }
+        close_pad(e->gdevice.which);
         break;
     }
 }
@@ -554,6 +602,16 @@ void host_input_update(void) {
         };
         for (unsigned i = 0; i < sizeof pad_buttons / sizeof *pad_buttons; i++)
             if (SDL_GetGamepadButton(pad, pad_buttons[i].sdl)) b |= B(pad_buttons[i].btn);
+
+        // Controller shortcut: L3 + R3 (both thumbsticks pressed) or Minus + Plus toggles Forge overlay
+        static bool s_overlay_combo_prev;
+        bool combo_sticks = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_STICK) && SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+        bool combo_select_start = SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_BACK) && SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_START);
+        bool combo_now = combo_sticks || combo_select_start;
+        if (combo_now && !s_overlay_combo_prev) {
+            overlay_toggle_menu();
+        }
+        s_overlay_combo_prev = combo_now;
         // face buttons: SDL names them by position (south, east, west, north). Settings FaceButtons: Position = the
         // Switch layout; Label = the letter on the button (PlayStation symbols as an Xbox pad's letters at that place)
         static const SDL_GamepadButton face[4] = {SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_WEST,

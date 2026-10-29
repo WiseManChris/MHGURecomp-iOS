@@ -32,6 +32,7 @@
 #include "hle.h"
 #include "hle/input.h"
 #include "interp.h"
+#include "kernel.h"
 #include "mods.h"
 #include "overlay.h"
 
@@ -894,6 +895,8 @@ HLE_FUNC("forge_fs_fileExists", f_file_exists) {
         c->pc = a;                                     \
         rt_dispatch(c);                                \
     }
+
+// nn::os::LightEvent
 FORWARD("forge_nnosInitializeLightEvent", "_ZN2nn2os20InitializeLightEventEPNS0_14LightEventTypeEbNS0_14EventClearModeE", f_le_init)
 FORWARD("forge_nnosFinalizeLightEvent", "_ZN2nn2os18FinalizeLightEventEPNS0_14LightEventTypeE", f_le_fini)
 FORWARD("forge_nnosSignalLightEvent", "_ZN2nn2os16SignalLightEventEPNS0_14LightEventTypeE", f_le_signal)
@@ -901,14 +904,260 @@ FORWARD("forge_nnosWaitLightEvent", "_ZN2nn2os14WaitLightEventEPNS0_14LightEvent
 FORWARD("forge_nnosTryWaitLightEvent", "_ZN2nn2os17TryWaitLightEventEPNS0_14LightEventTypeE", f_le_trywait)
 FORWARD("forge_nnosTimedWaitLightEvent", "_ZN2nn2os19TimedWaitLightEventEPNS0_14LightEventTypeENS_8TimeSpanE", f_le_timedwait)
 FORWARD("forge_nnosClearLightEvent", "_ZN2nn2os15ClearLightEventEPNS0_14LightEventTypeE", f_le_clear)
+
+FORWARD("nnosInitializeLightEvent", "_ZN2nn2os20InitializeLightEventEPNS0_14LightEventTypeEbNS0_14EventClearModeE", f_nnos_le_init)
+FORWARD("nnosFinalizeLightEvent", "_ZN2nn2os18FinalizeLightEventEPNS0_14LightEventTypeE", f_nnos_le_fini)
+FORWARD("nnosSignalLightEvent", "_ZN2nn2os16SignalLightEventEPNS0_14LightEventTypeE", f_nnos_le_signal)
+FORWARD("nnosWaitLightEvent", "_ZN2nn2os14WaitLightEventEPNS0_14LightEventTypeE", f_nnos_le_wait)
+FORWARD("nnosTryWaitLightEvent", "_ZN2nn2os17TryWaitLightEventEPNS0_14LightEventTypeE", f_nnos_le_trywait)
+FORWARD("nnosTimedWaitLightEvent", "_ZN2nn2os19TimedWaitLightEventEPNS0_14LightEventTypeENS_8TimeSpanE", f_nnos_le_timedwait)
+FORWARD("nnosClearLightEvent", "_ZN2nn2os15ClearLightEventEPNS0_14LightEventTypeE", f_nnos_le_clear)
+
+// nn::os::Mutex
 FORWARD("forge_nnosLockMutex", "_ZN2nn2os9LockMutexEPNS0_9MutexTypeE", f_mutex_lock)
 FORWARD("forge_nnosUnlockMutex", "_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE", f_mutex_unlock)
 HLE_FUNC("forge_nnosInitializeMutex", f_mutex_init) {  // (mutex, recursive): lock level 0
     c->r[2] = 0;
-    uint32_t a = gsym("nnosInitializeMutex");
+    uint32_t a = gsym("_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi");
+    if (!a) a = gsym("nnosInitializeMutex");
     if (!a) { RET(0); return; }
     c->pc = a;
     rt_dispatch(c);
+}
+
+FORWARD("nnosLockMutex", "_ZN2nn2os9LockMutexEPNS0_9MutexTypeE", f_nnos_lock)
+FORWARD("nnosUnlockMutex", "_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE", f_nnos_unlock)
+FORWARD("nnosTryLockMutex", "_ZN2nn2os12TryLockMutexEPNS0_9MutexTypeE", f_nnos_trylock)
+FORWARD("nnosFinalizeMutex", "_ZN2nn2os13FinalizeMutexEPNS0_9MutexTypeE", f_nnos_fini)
+HLE_FUNC("nnosInitializeMutex", f_nnos_mutex_init) {  // (mutex, recursive, lock_level)
+    c->r[2] = 0;
+    uint32_t a = gsym("_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi");
+    if (!a) a = gsym("nnosInitializeMutex");
+    if (!a) { RET(0); return; }
+    c->pc = a;
+    rt_dispatch(c);
+}
+
+// ------------------------------------------------------------------ nn::os TLS slot management
+static uint64_t g_tls_allocated_mask;
+static pthread_mutex_t g_tls_slot_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int tls_alloc_slot(void) {
+    pthread_mutex_lock(&g_tls_slot_lock);
+    int slot = -1;
+    for (int i = 0; i < 64; i++) {
+        if (!((g_tls_allocated_mask >> i) & 1)) {
+            g_tls_allocated_mask |= (1ull << i);
+            slot = i;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_tls_slot_lock);
+    return slot;
+}
+
+static void tls_free_slot(int slot) {
+    if (slot < 0 || slot >= 64) return;
+    pthread_mutex_lock(&g_tls_slot_lock);
+    g_tls_allocated_mask &= ~(1ull << slot);
+    pthread_mutex_unlock(&g_tls_slot_lock);
+}
+
+// Result nnosAllocateTlsSlot(TlsSlot *out_slot, TlsDestructor destructor)
+HLE_FUNC("nnosAllocateTlsSlot", f_nnos_alloc_tls) {
+    uint32_t out_slot_ptr = ARG(0);
+    int slot = tls_alloc_slot();
+    if (slot < 0) {
+        RET(0x1A0A);  // failure ResultCode
+        return;
+    }
+    if (out_slot_ptr) ST32(out_slot_ptr, (uint32_t)slot);
+    RET(0);  // nn::Result success
+}
+HLE_FUNC("_ZN2nn2os15AllocateTlsSlotEPNS0_7TlsSlotEPFvPvE", f_alloc_tls_cpp) { f_nnos_alloc_tls(c); }
+
+// void nnosFreeTlsSlot(TlsSlot slot)
+HLE_FUNC("nnosFreeTlsSlot", f_nnos_free_tls) {
+    uint32_t slot = ARG(0);
+    tls_free_slot((int)slot);
+    KThread *t = kernel_current_thread();
+    if (t && slot < 64) t->tls_slots[slot] = 0;
+}
+HLE_FUNC("_ZN2nn2os11FreeTlsSlotENS0_7TlsSlotE", f_free_tls_cpp) { f_nnos_free_tls(c); }
+
+// void *nnosGetTlsValue(TlsSlot slot)
+HLE_FUNC("nnosGetTlsValue", f_nnos_get_tls) {
+    uint32_t slot = ARG(0);
+    KThread *t = kernel_current_thread();
+    uint32_t val = (t && slot < 64) ? t->tls_slots[slot] : 0;
+    RET(val);
+}
+HLE_FUNC("_ZN2nn2os11GetTlsValueENS0_7TlsSlotE", f_get_tls_cpp) { f_nnos_get_tls(c); }
+
+// void nnosSetTlsValue(TlsSlot slot, uintptr_t value)
+HLE_FUNC("nnosSetTlsValue", f_nnos_set_tls) {
+    uint32_t slot = ARG(0);
+    uint32_t val = ARG(1);
+    KThread *t = kernel_current_thread();
+    if (t && slot < 64) t->tls_slots[slot] = val;
+}
+HLE_FUNC("_ZN2nn2os11SetTlsValueENS0_7TlsSlotEPKv", f_set_tls_cpp) { f_nnos_set_tls(c); }
+
+// int nnosGetUsedTlsSlotCount(void)
+HLE_FUNC("nnosGetUsedTlsSlotCount", f_nnos_tls_count) {
+    pthread_mutex_lock(&g_tls_slot_lock);
+    int count = __builtin_popcountll(g_tls_allocated_mask);
+    pthread_mutex_unlock(&g_tls_slot_lock);
+    RET(count);
+}
+HLE_FUNC("_ZN2nn2os19GetUsedTlsSlotCountEv", f_tls_count_cpp) { f_nnos_tls_count(c); }
+
+// ------------------------------------------------------------------ System Tick
+// Tick nnosGetSystemTick(void) -> 64-bit tick count in r0:r1 at 19.2 MHz
+HLE_FUNC("nnosGetSystemTick", f_nnos_tick) {
+    uint64_t ns = plat_now_ns();
+    uint64_t ticks = (uint64_t)(((unsigned __int128)ns * 19200000ULL) / 1000000000ULL);
+    c->r[0] = (uint32_t)ticks;
+    c->r[1] = (uint32_t)(ticks >> 32);
+}
+HLE_FUNC("_ZN2nn2os13GetSystemTickEv", f_get_tick_cpp) { f_nnos_tick(c); }
+
+// int64_t nnosGetSystemTickFrequency(void) -> 19,200,000 Hz in r0:r1
+HLE_FUNC("nnosGetSystemTickFrequency", f_nnos_tick_freq) {
+    c->r[0] = 19200000u;
+    c->r[1] = 0;
+}
+HLE_FUNC("_ZN2nn2os22GetSystemTickFrequencyEv", f_get_tick_freq_cpp) { f_nnos_tick_freq(c); }
+
+// ------------------------------------------------------------------ ARM Unwind personality stubs
+HLE_FUNC("__aeabi_unwind_cpp_pr0", f_unwind_pr0) { RET(0); }
+HLE_FUNC("__aeabi_unwind_cpp_pr1", f_unwind_pr1) { RET(0); }
+HLE_FUNC("__aeabi_unwind_cpp_pr2", f_unwind_pr2) { RET(0); }
+
+// ------------------------------------------------------------------ pattern matching
+typedef struct {
+    uint8_t val;
+    uint8_t mask;
+} PatByte;
+
+static int parse_pattern(const char *pat_str, PatByte *out, int max_bytes) {
+    int n = 0;
+    const char *p = pat_str;
+    while (*p && n < max_bytes) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        if (*p == '?') {
+            p++;
+            if (*p == '?') p++;
+            out[n].val = 0;
+            out[n].mask = 0;
+            n++;
+        } else {
+            char hex[3] = {0};
+            if (!isxdigit((unsigned char)p[0])) break;
+            hex[0] = *p++;
+            if (isxdigit((unsigned char)p[0])) hex[1] = *p++;
+            out[n].val = (uint8_t)strtoul(hex, NULL, 16);
+            out[n].mask = 0xFF;
+            n++;
+        }
+    }
+    return n;
+}
+
+static uint32_t pattern_scan(uint32_t start_addr, uint32_t end_addr, const PatByte *pat, int pat_len) {
+    if (pat_len <= 0 || start_addr + (uint32_t)pat_len > end_addr) return 0;
+    uint32_t max_start = end_addr - (uint32_t)pat_len;
+    for (uint32_t a = start_addr; a <= max_start; a++) {
+        bool match = true;
+        for (int i = 0; i < pat_len; i++) {
+            uint8_t b = LD8(a + (uint32_t)i);
+            if ((b & pat[i].mask) != (pat[i].val & pat[i].mask)) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return a;
+    }
+    return 0;
+}
+
+HLE_FUNC("forge_pattern_find", f_pat_find) {
+    char pat_buf[256];
+    gstr_copy(ARG(0), pat_buf, sizeof pat_buf);
+    PatByte pat[64];
+    int len = parse_pattern(pat_buf, pat, 64);
+    uint32_t start = g_modules[0].base + g_modules[0].text_off;
+    uint32_t end = start + g_modules[0].text_size;
+    uint32_t found = pattern_scan(start, end, pat, len);
+    LOG("[forge] pattern_find('%s') -> 0x%08x\n", pat_buf, found);
+    RET(found);
+}
+
+HLE_FUNC("forge_pattern_findFrom", f_pat_find_from) {
+    uint32_t start = ARG(0);
+    char pat_buf[256];
+    gstr_copy(ARG(1), pat_buf, sizeof pat_buf);
+    PatByte pat[64];
+    int len = parse_pattern(pat_buf, pat, 64);
+    uint32_t end = g_modules[0].base + g_modules[0].text_off + g_modules[0].text_size;
+    uint32_t found = pattern_scan(start, end, pat, len);
+    LOG("[forge] pattern_findFrom(0x%08x, '%s') -> 0x%08x\n", start, pat_buf, found);
+    RET(found);
+}
+
+HLE_FUNC("forge_pattern_findBits", f_pat_find_bits) {
+    f_pat_find(c);
+}
+
+HLE_FUNC("forge_pattern_findBitsFrom", f_pat_find_bits_from) {
+    f_pat_find_from(c);
+}
+
+HLE_FUNC("forge_pattern_create", f_pat_create) {
+    char pat_buf[256];
+    gstr_copy(ARG(0), pat_buf, sizeof pat_buf);
+    PatByte pat[64];
+    int len = parse_pattern(pat_buf, pat, 64);
+    uint32_t mem = hle_alloc((uint32_t)(len * 2));
+    for (int i = 0; i < len; i++) {
+        ST8(mem + (uint32_t)(i * 2), pat[i].val);
+        ST8(mem + (uint32_t)(i * 2 + 1), pat[i].mask);
+    }
+    c->r[0] = mem;
+    c->r[1] = (uint32_t)len;
+}
+
+HLE_FUNC("forge_pattern_destroy", f_pat_destroy) {
+    // Memory kept in HLE heap
+}
+
+HLE_FUNC("forge_pattern_findEx", f_pat_find_ex) {
+    uint32_t pat_ptr = ARG(0);
+    uint32_t pat_len = ARG(1);
+    if (!pat_ptr || !pat_len || pat_len > 128) { RET(0); return; }
+    PatByte pat[128];
+    for (uint32_t i = 0; i < pat_len; i++) {
+        pat[i].val = LD8(pat_ptr + i * 2);
+        pat[i].mask = LD8(pat_ptr + i * 2 + 1);
+    }
+    uint32_t start = g_modules[0].base + g_modules[0].text_off;
+    uint32_t end = start + g_modules[0].text_size;
+    RET(pattern_scan(start, end, pat, (int)pat_len));
+}
+
+HLE_FUNC("forge_pattern_findFromEx", f_pat_find_from_ex) {
+    uint32_t start = ARG(0);
+    uint32_t pat_ptr = ARG(1);
+    uint32_t pat_len = ARG(2);
+    if (!pat_ptr || !pat_len || pat_len > 128) { RET(0); return; }
+    PatByte pat[128];
+    for (uint32_t i = 0; i < pat_len; i++) {
+        pat[i].val = LD8(pat_ptr + i * 2);
+        pat[i].mask = LD8(pat_ptr + i * 2 + 1);
+    }
+    uint32_t end = g_modules[0].base + g_modules[0].text_off + g_modules[0].text_size;
+    RET(pattern_scan(start, end, pat, (int)pat_len));
 }
 
 // ------------------------------------------------------------------ input (the controller the game sees, the keyboard)
@@ -1164,6 +1413,15 @@ static void app_run(Cpu *c) {
             gcall(c, p->on_init, 0, 0, 0, 0);
         }
     }
+    LOG("================================================================\n");
+    LOG("[forge] PLUGIN STATUS SUMMARY: %d plugin(s) registered\n", nplugins);
+    for (int i = 0; i < nplugins; i++) {
+        LOG("[forge]   [%d] %-30s | Active: %s | update: %s | imgui: %s\n",
+            i + 1, plugins[i].name, plugins[i].active ? "YES" : "NO",
+            plugins[i].on_update ? "YES" : "NO",
+            plugins[i].on_imgui[FORGE_IMGUI_RENDER] ? "YES" : "NO");
+    }
+    LOG("================================================================\n");
     memcpy(c->r, args, sizeof args);
     fnhook_call_original(c, text_addr(OFF_APP_RUN));
 }

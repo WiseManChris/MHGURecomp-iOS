@@ -16,7 +16,20 @@
 #include "config.h"
 #include "rt.h"
 
-Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 0};
+Config g_config = {DISPLAY_BORDERLESS, 1920, 1080, 0, 0, 60, 1, 1, 1, FACE_POSITION, 39500, "", 1, 1, 1, {{1, 1, 1, 1}, 2}, 1.0f, 0.0f, 1.0f, UI_CENTER, 1, 0, 0, COMBO_LENIENT};
+static volatile int g_window_focused = 1;
+
+int config_live_combo_window(void) {
+    return g_config.combo_window;
+}
+
+void config_window_focus(int focused) {
+    g_window_focused = focused;
+}
+
+int config_is_window_focused(void) {
+    return g_window_focused;
+}
 uint32_t g_render_size[2] = {1920, 1080};
 float g_render_aspect = 16.0f / 9.0f;
 float g_fov_scale = 1.0f;
@@ -250,6 +263,14 @@ static void set_key(const char *key, char *val, int line) {
     } else if (!strcmp(k, "backgroundinput")) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.background_input = 1;
         else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.background_input = 0;
+        else ok = false;
+    } else if (!strcmp(k, "muteinbackground")) {
+        if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.mute_in_background = 1;
+        else if (!strcmp(v, "off") || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "no")) g_config.mute_in_background = 0;
+        else ok = false;
+    } else if (!strcmp(k, "comboinputwindow") || !strcmp(k, "combowindow")) {
+        if (!strcmp(v, "lenient") || !strcmp(v, "default")) g_config.combo_window = COMBO_LENIENT;
+        else if (!strcmp(v, "strict")) g_config.combo_window = COMBO_STRICT;
         else ok = false;
     } else if (!strcmp(k, "stretch")) {
         if (!strcmp(v, "on") || !strcmp(v, "1") || !strcmp(v, "true") || !strcmp(v, "yes")) g_config.stretch = 1;

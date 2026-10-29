@@ -19,6 +19,7 @@ const char *mods_dir(void);
 void mods_make_dir(void);  // creates an empty mods/ (standalone: shows players where mods go)
 int mods_romfs_layers(const char **out, int max);  // host folders to layer over the RomFS, in order
 void mods_patch_module(struct Module *m, const uint8_t build_id[32]);  // exefs patches for a loaded module
+void mods_apply_code_patches(void);  // dispatch modified ExeFS code functions to the interpreter
 void forge_init(void);  // Forge plugins from the mods' RomFS (runtime/forge.c): before the game starts
 void hpscale_init(void);  // large monster HP by the number of hunters (runtime/hle/hpscale.c)
 void villagehub_init(void);  // Village quests at the Hub / Pub counter (runtime/hle/villagehub.c)

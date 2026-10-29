@@ -35,6 +35,7 @@ struct KThread {
     jmp_buf unwind;        // svcExitThread: back to thread_main
     bool started, finished;
     KThread *anext;        // every thread (g_klock)
+    uint32_t tls_slots[64]; // nn::os TLS slot storage for plugins/threads
 };
 
 typedef struct KSharedMem {
@@ -59,4 +60,6 @@ uint32_t kernel_new_handle(KObject *o);
 void kernel_signal(KObject *o);  // caller holds g_klock
 KEvent *kernel_create_event_pair(uint32_t *writable, uint32_t *readable);
 KThread *kernel_current_thread(void);
+int kernel_stack_callers(uint32_t sp, char *line, size_t size);  // " addr addr ...": the game's calls, from the stack
+void kernel_log_guest_stack(const char *tag, const Cpu *c);       // logs tag, lr and those callers
 uint32_t kernel_heap_size(void);

@@ -962,8 +962,12 @@ static void render_frame(Renderer *r, float *stereo) {
     }
 }
 
-// Output gain: menu volume times MHGU_AUDIO_GAIN (applied live).
+// Output gain: menu volume times MHGU_AUDIO_GAIN (applied live), 0 if muted in background.
 static void apply_gain(SDL_AudioStream *st) {
+    if (g_config.mute_in_background && !config_is_window_focused()) {
+        if (st && SDL_GetAudioStreamGain(st) != 0.0f) SDL_SetAudioStreamGain(st, 0.0f);
+        return;
+    }
     static double env = -1;
     if (env < 0) env = getenv("MHGU_AUDIO_GAIN") ? atof(getenv("MHGU_AUDIO_GAIN")) : 1.0;
     float g = (float)(env * 1.0);

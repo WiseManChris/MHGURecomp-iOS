@@ -4,6 +4,7 @@
 
 enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
 enum { FACE_POSITION, FACE_LABEL };
+enum { COMBO_LENIENT, COMBO_STRICT };
 
 // [Monster HP]: factors on the HP multiplier of Hub-type quests' large monsters
 #define HP_QUESTS_MAX 256
@@ -37,6 +38,8 @@ typedef struct {
     int ui_anchor;            // where the HUD goes on a picture wider than 16:9: UI_*
     int background_input;     // the controller keeps working while the window is in the background (runtime/ui.c)
     int stretch;              // 1: stretch to fill entire screen (no letterboxing), 0: maintain aspect ratio
+    int mute_in_background;   // [Audio] MuteInBackground: no sound while the window is not focused
+    int combo_window;         // [Controls] ComboInputWindow: COMBO_LENIENT / COMBO_STRICT
 } Config;
 enum { UI_CENTER = 1, UI_21_9, UI_32_9, UI_EDGES };  // the middle 16:9, 21:9, 32:9, the picture's sides
 
@@ -49,3 +52,6 @@ extern float g_ui_anchor_aspect;   // the HUD's width / height, 16:9 .. g_render
 float camera_fovy(float fovy, float aspect);  // a 3D camera's vertical field of view for its aspect (gen.py PATCHES)
 
 void config_load(void);  // before the window and the guest start
+int config_live_combo_window(void);
+void config_window_focus(int focused);
+int config_is_window_focused(void);

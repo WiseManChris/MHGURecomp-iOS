@@ -132,6 +132,10 @@ static void set_open(bool open) {
     LOG("[forge] menu %s\n", open ? "open" : "closed");
 }
 
+void overlay_toggle_menu(void) {
+    if (g_enabled) set_open(!g_open);
+}
+
 bool overlay_event(const SDL_Event *e) {
     if (!g_enabled) return false;
     if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && (int)e->key.scancode == g_menu_key) {
@@ -170,6 +174,28 @@ bool overlay_event(const SDL_Event *e) {
         v.kind = Ev::TEXT;
         SDL_strlcpy(v.text, e->text.text, sizeof v.text);
         break;
+    case SDL_EVENT_FINGER_DOWN: {
+        int ww = 0, wh = 0;
+        if (w) SDL_GetWindowSizeInPixels(w, &ww, &wh);
+        v.kind = Ev::POS, v.x = e->tfinger.x * ww, v.y = e->tfinger.y * wh;
+        queue(v);
+        v.kind = Ev::BUTTON, v.button = ImGuiMouseButton_Left, v.down = true, v.x = e->tfinger.x * ww, v.y = e->tfinger.y * wh;
+        break;
+    }
+    case SDL_EVENT_FINGER_MOTION: {
+        int ww = 0, wh = 0;
+        if (w) SDL_GetWindowSizeInPixels(w, &ww, &wh);
+        v.kind = Ev::POS, v.x = e->tfinger.x * ww, v.y = e->tfinger.y * wh;
+        break;
+    }
+    case SDL_EVENT_FINGER_UP: {
+        int ww = 0, wh = 0;
+        if (w) SDL_GetWindowSizeInPixels(w, &ww, &wh);
+        v.kind = Ev::POS, v.x = e->tfinger.x * ww, v.y = e->tfinger.y * wh;
+        queue(v);
+        v.kind = Ev::BUTTON, v.button = ImGuiMouseButton_Left, v.down = false, v.x = e->tfinger.x * ww, v.y = e->tfinger.y * wh;
+        break;
+    }
     case SDL_EVENT_WINDOW_FOCUS_LOST: case SDL_EVENT_WINDOW_FOCUS_GAINED:
         v.kind = Ev::FOCUS, v.down = e->type == SDL_EVENT_WINDOW_FOCUS_GAINED;
         queue(v);
