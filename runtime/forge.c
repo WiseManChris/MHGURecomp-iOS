@@ -1592,9 +1592,9 @@ void forge_init(void) {
     }
     // Also recursively scan the mods directory itself to catch any loose plugins or non-standard folders
     scan_plugins_in_dir(mods_dir(), 0, found, &nf);
-    if (is_dir("data/mods")) scan_plugins_in_dir("data/mods", 0, found, &nf);
-    if (is_dir("atmosphere")) scan_plugins_in_dir("atmosphere", 0, found, &nf);
-    if (is_dir("contents")) scan_plugins_in_dir("contents", 0, found, &nf);
+    scan_plugins_in_dir("data/mods", 0, found, &nf);
+    scan_plugins_in_dir("atmosphere", 0, found, &nf);
+    scan_plugins_in_dir("contents", 0, found, &nf);
     LOG("[forge] Registered %d plugin(s) across all mods\n", nf);
     str_savedata = gstring("savedata");
     uint32_t at = PLUGIN_BASE;
