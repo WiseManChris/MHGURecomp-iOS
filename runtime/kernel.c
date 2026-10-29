@@ -26,7 +26,15 @@
 
 #define TITLE_ID 0x0100770008DD8000ull
 
-pthread_mutex_t g_klock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t g_klock;
+
+__attribute__((constructor)) static void init_klock(void) {
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&g_klock, &attr);
+    pthread_mutexattr_destroy(&attr);
+}
 static __thread KThread *t_cur;
 
 // ------------------------------------------------------------------ handle table
@@ -532,21 +540,28 @@ static uint64_t get_info(uint32_t id0, uint32_t handle, uint64_t id1, uint32_t *
 
 // The game's calls that led here, guessed from the stack: words from sp up that point just past a BL / BLX in the
 // game's code (a heuristic backtrace; stale words can show up too)
-int kernel_stack_callers(uint32_t sp, char *line, size_t size) {
+static int kernel_stack_callers_locked(uint32_t sp, char *line, size_t size) {
     int n = 0, k = 0;
     line[0] = 0;
-    if (!kernel_mapped(sp, 4)) return 0;
+    if (!kernel_mapped_locked(sp, 4)) return 0;
     for (uint32_t a = sp; a < sp + 0x600 && k < 10 && n < (int)size - 12; a += 4) {
-        if (!kernel_mapped(a, 4)) break;
+        if (!kernel_mapped_locked(a, 4)) break;
         uint32_t v = LD32(a);
         if (v < MAIN_BASE + 4 || v >= SDK_BASE + 0x400000 || (v & 3)) continue;
-        if (!kernel_mapped(v - 4, 4)) continue;
+        if (!kernel_mapped_locked(v - 4, 4)) continue;
         uint32_t ins = LD32(v - 4);
         if ((ins & 0x0F000000u) != 0x0B000000u && (ins & 0xFE000000u) != 0xFA000000u && (ins & 0x0FFFFFF0u) != 0x012FFF30u)
             continue;
         n += snprintf(line + n, size - n, " %x", v);
         k++;
     }
+    return k;
+}
+
+int kernel_stack_callers(uint32_t sp, char *line, size_t size) {
+    pthread_mutex_lock(&g_klock);
+    int k = kernel_stack_callers_locked(sp, line, size);
+    pthread_mutex_unlock(&g_klock);
     return k;
 }
 
@@ -811,7 +826,7 @@ static void *dump_threads(void *arg) {
             // callers: stack words that point just past a BL / BLX in the game's code (a heuristic backtrace)
             if (t->wait_kind != WAIT_NONE || t->in_sync_wait) {
                 char line[400];
-                kernel_stack_callers(t->cpu.r[13], line, sizeof line);
+                kernel_stack_callers_locked(t->cpu.r[13], line, sizeof line);
                 LOG("[threads]     callers:%s\n", line);
             }
         }
@@ -821,7 +836,7 @@ static void *dump_threads(void *arg) {
 }
 
 void kernel_init(void) {
-    int dump_secs = 5;
+    int dump_secs = 0;
     if (getenv("MHGU_DUMP_THREADS")) dump_secs = atoi(getenv("MHGU_DUMP_THREADS"));
     if (dump_secs > 0) {
         pthread_t th;

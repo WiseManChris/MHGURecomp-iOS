@@ -167,6 +167,14 @@ static char *rel_path(File *f) {
     return s;
 }
 
+static bool path_ends_with_ci(const char *p, const char *suffix) {
+    if (!p || !suffix) return false;
+    size_t lp = strlen(p), ls = strlen(suffix);
+    if (lp < ls) return false;
+    if (lp > ls && p[lp - ls - 1] != '/' && p[lp - ls - 1] != '\\') return false;
+    return strcasecmp(p + lp - ls, suffix) == 0;
+}
+
 bool romfs_open(const char *base_dir, const char *const *overlays, int noverlays) {
     Dir *root = scan(base_dir, "", 0);
     if (!root) { LOG("[romfs] cannot read %s\n", base_dir); return false; }
@@ -187,7 +195,8 @@ bool romfs_open(const char *base_dir, const char *const *overlays, int noverlays
             continue;
         }
 
-        // Check if `o` has a top-level nativeNX directory
+        // Check if `overlays[i]` ends with nativeNX or if `o` has a top-level nativeNX directory
+        bool is_native_nx = path_ends_with_ci(overlays[i], "nativeNX");
         bool has_native_nx = false;
         for (int d = 0; d < o->ndirs; d++) {
             if (!strcasecmp(o->dirs[d]->name, "nativeNX")) {
@@ -197,15 +206,17 @@ bool romfs_open(const char *base_dir, const char *const *overlays, int noverlays
         }
 
         int n = 0;
-        if (has_native_nx || !native_nx) {
+        if (has_native_nx) {
             n = merge(root, o);
-        } else {
-            // Mod contains loose nativeNX folders/files (arc/, sound/, movie/, resident.arc, etc.)
-            // Merge directly into nativeNX so the game finds them under nativeNX/...!
+        } else if (is_native_nx || native_nx) {
+            // Mod is nativeNX or loose nativeNX folders (arc, loc, sa, system, etc.):
+            // merge directly into nativeNX so the game finds them under nativeNX/...!
             n = merge(native_nx, o);
+        } else {
+            n = merge(root, o);
         }
         LOG("[romfs] mod %s: %d files merged into RomFS (target: %s)\n",
-            overlays[i], n, (has_native_nx || !native_nx) ? "root" : "nativeNX");
+            overlays[i], n, has_native_nx ? "root" : (is_native_nx || native_nx) ? "nativeNX" : "root");
     }
     sort_tree(root);
     Lists l = {0};

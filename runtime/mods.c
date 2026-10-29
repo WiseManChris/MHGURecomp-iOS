@@ -15,6 +15,8 @@ static bool is_dir(const char *p) {
     return !stat(p, &st) && S_ISDIR(st.st_mode);
 }
 
+static bool find_dir(const char *dir, const char *want, int depth, char *out, size_t n);
+
 const char *mods_dir(void) {
     static char s_dir[1024];
     if (s_dir[0]) return s_dir;
@@ -106,6 +108,17 @@ static bool has_loose_files(const char *parent) {
     return found;
 }
 
+static bool is_reserved_app_dir(const char *name) {
+    static const char *const reserved[] = {
+        "data", "save", "cheats", "mods", "cache", "logs",
+        "Frameworks", "PlugIns", "SharedFrameworks", "System"
+    };
+    for (size_t i = 0; i < sizeof(reserved) / sizeof(reserved[0]); i++) {
+        if (!strcasecmp(name, reserved[i])) return true;
+    }
+    return false;
+}
+
 static void list_mods(void) {
     if (g_nmods >= 0) return;
     g_nmods = 0;
@@ -128,32 +141,81 @@ static void list_mods(void) {
         return;
     }
 
-    // Check if mdir itself directly contains romfs, nativeNX, arc, or plugins, or loose mod files (user unzipped directly into mods/)
-    if (has_child_ci(mdir, "romfs") || has_child_ci(mdir, "nativeNX") || has_child_ci(mdir, "arc") || has_child_ci(mdir, "plugins") || has_loose_files(mdir)) {
+    bool mdir_has_direct_romfs = has_child_ci(mdir, "romfs") || has_child_ci(mdir, "nativeNX");
+    if (mdir_has_direct_romfs || has_loose_files(mdir)) {
         add_mod_name(".");
     }
 
     // Scan the active mods directory
-    scan_dir_for_mods(mdir);
+    DIR *d = opendir(mdir);
+    if (d) {
+        struct dirent *e;
+        while (g_nmods < MAX_MODS && (e = readdir(d))) {
+            if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+            if (mdir_has_direct_romfs && (!strcasecmp(e->d_name, "romfs") || !strcasecmp(e->d_name, "nativeNX"))) continue;
+            char p[1100];
+            snprintf(p, sizeof p, "%s/%s", mdir, e->d_name);
+            if (is_dir(p)) add_mod_name(e->d_name);
+        }
+        closedir(d);
+    }
 
     // If data/mods exists and is distinct from mdir, scan it too
     if (strcasecmp(mdir, "data/mods") && is_dir("data/mods")) {
         scan_dir_for_mods("data/mods");
     }
 
-    // Support Atmosphere Switch CFW layout: atmosphere/contents/<title_id>/romfs
+    // Support Atmosphere Switch CFW layout: atmosphere/contents/<title_id>
     if (is_dir("atmosphere/contents")) {
-        DIR *d = opendir("atmosphere/contents");
-        if (d) {
+        DIR *ad = opendir("atmosphere/contents");
+        if (ad) {
             struct dirent *e;
-            while ((e = readdir(d))) {
+            while ((e = readdir(ad))) {
                 if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
                 char p[1100];
                 snprintf(p, sizeof p, "atmosphere/contents/%s", e->d_name);
                 if (is_dir(p)) add_mod_name(p);
             }
-            closedir(d);
+            closedir(ad);
         }
+    }
+
+    // Support contents/<title_id> directly
+    if (is_dir("contents")) {
+        DIR *cd = opendir("contents");
+        if (cd) {
+            struct dirent *e;
+            while ((e = readdir(cd))) {
+                if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+                char p[1100];
+                snprintf(p, sizeof p, "contents/%s", e->d_name);
+                if (is_dir(p)) add_mod_name(p);
+            }
+            closedir(cd);
+        }
+    }
+
+    // Scan current directory (Documents) for any user mod folders placed at top-level
+    DIR *cur = opendir(".");
+    if (cur) {
+        struct dirent *e;
+        while (g_nmods < MAX_MODS && (e = readdir(cur))) {
+            if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+            if (is_reserved_app_dir(e->d_name)) continue;
+            struct stat st;
+            if (!stat(e->d_name, &st) && S_ISDIR(st.st_mode)) {
+                // If it contains romfs, nativeNX, arc, exefs, or plugins, it's a mod
+                char dummy[512];
+                if (find_dir(e->d_name, "romfs", 3, dummy, sizeof dummy) ||
+                    find_dir(e->d_name, "nativeNX", 3, dummy, sizeof dummy) ||
+                    find_dir(e->d_name, "exefs", 3, dummy, sizeof dummy) ||
+                    find_dir(e->d_name, "arc", 3, dummy, sizeof dummy) ||
+                    has_loose_files(e->d_name)) {
+                    add_mod_name(e->d_name);
+                }
+            }
+        }
+        closedir(cur);
     }
 
     qsort(g_names, g_nmods, sizeof *g_names, cmp);
@@ -201,15 +263,18 @@ int mods_romfs_layers(const char **out, int max) {
         char mod[1100], path[1100];
         if (!strcmp(g_names[i], ".")) {
             snprintf(mod, sizeof mod, "%s", mdir);
-        } else if (g_names[i][0] == '/' || !strncmp(g_names[i], "atmosphere/", 11) || !strncmp(g_names[i], "data/", 5)) {
+        } else if (g_names[i][0] == '/' || !strncmp(g_names[i], "atmosphere/", 11) || !strncmp(g_names[i], "contents/", 9) || !strncmp(g_names[i], "data/", 5)) {
             snprintf(mod, sizeof mod, "%s", g_names[i]);
         } else {
             snprintf(mod, sizeof mod, "%s/%s", mdir, g_names[i]);
             if (!is_dir(mod)) {
                 snprintf(mod, sizeof mod, "data/mods/%s", g_names[i]);
                 if (!is_dir(mod)) {
-                    LOG("[mods] %s: no such directory\n", g_names[i]);
-                    continue;
+                    snprintf(mod, sizeof mod, "%s", g_names[i]);
+                    if (!is_dir(mod)) {
+                        LOG("[mods] %s: no such directory\n", g_names[i]);
+                        continue;
+                    }
                 }
             }
         }
@@ -221,31 +286,20 @@ int mods_romfs_layers(const char **out, int max) {
         if (find_dir(mod, "romfs", 8, path, sizeof path)) {
             found = true;
         }
-        // 2. Search for a 'nativeNX' directory (depth up to 8) - strip /nativeNX so path holds the directory containing nativeNX
+        // 2. Search for a 'nativeNX' directory (depth up to 8)
         else if (find_dir(mod, "nativeNX", 8, path, sizeof path)) {
-            char *slash = strrchr(path, '/');
-            if (slash) *slash = 0;
             found = true;
         }
-        // 3. Search for an 'arc' directory (depth up to 8: texture/model/UI mods without wrapper)
-        else if (find_dir(mod, "arc", 8, path, sizeof path)) {
-            char *slash = strrchr(path, '/');
-            if (slash) *slash = 0;
-            found = true;
-        }
-        // 4. Any other mod folder: layer it directly so plugins, configs, or loose assets are accessible in RomFS
+        // 3. Mod directory itself (loose folders/files like arc, loc, sa, system, or flat files)
         else {
             snprintf(path, sizeof path, "%s", mod);
             found = true;
         }
 
-        if (!found) {
-            LOG("[mods] %s: skipping invalid folder\n", g_names[i]);
-            continue;
+        if (found) {
+            out[k++] = strdup(path);
+            LOG("[mods] [%d] %s: active romfs layer -> %s\n", k, g_names[i], path);
         }
-
-        out[k++] = strdup(path);
-        LOG("[mods] [%d] %s: active romfs layer -> %s\n", k, g_names[i], path);
     }
     return k;
 }
@@ -392,7 +446,10 @@ void mods_patch_module(Module *m, const uint8_t build_id[32]) {
             snprintf(mod, sizeof mod, "%s/%s", mdir, g_names[i]);
             if (!is_dir(mod)) {
                 snprintf(mod, sizeof mod, "data/mods/%s", g_names[i]);
-                if (!is_dir(mod)) continue;
+                if (!is_dir(mod)) {
+                    snprintf(mod, sizeof mod, "%s", g_names[i]);
+                    if (!is_dir(mod)) continue;
+                }
             }
         }
         if (!find_dir(mod, "exefs", 8, ex, sizeof ex)) {
