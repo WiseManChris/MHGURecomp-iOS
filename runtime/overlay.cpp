@@ -27,6 +27,7 @@ static void ImGui_ImplVulkan_UpdateTexture(ImTextureData *) {}
 
 #include "forge.h"
 #include "overlay.h"
+#include "romfs.h"
 
 #define LOG(...) (fprintf(stderr, __VA_ARGS__), fflush(stderr))
 
@@ -430,7 +431,21 @@ void overlay_frame(void *cpu) {
                 ImGui::BulletText("Dear ImGui %s", IMGUI_VERSION);
                 ImGui::BulletText("cimgui");
             }
-            if (ImGui::CollapsingHeader("Loaded Plugins")) {
+            if (ImGui::CollapsingHeader("Active Mods (RomFS / Textures)", ImGuiTreeNodeFlags_DefaultOpen)) {
+                int nmods = romfs_mod_count();
+                if (nmods == 0) {
+                    ImGui::TextDisabled("No RomFS mods loaded");
+                } else {
+                    for (int i = 0; i < nmods; i++) {
+                        const RomFSModInfo *info = romfs_mod_info(i);
+                        if (!info) continue;
+                        ImGui::BulletText("%s: %d files active", info->name, info->files_merged);
+                    }
+                }
+                ImGui::Separator();
+                ImGui::TextDisabled("Total RomFS: %.1f GB (%d files)", (double)romfs_size() / 1e9, romfs_total_files());
+            }
+            if (ImGui::CollapsingHeader("Loaded Plugins (.nro / Code)", ImGuiTreeNodeFlags_DefaultOpen)) {
                 const char *names[16];
                 int n = forge_plugin_titles(names, 16);
                 for (int i = 0; i < n; i++) ImGui::BulletText("%s", names[i]);

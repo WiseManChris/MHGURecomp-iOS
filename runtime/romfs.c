@@ -154,6 +154,17 @@ static uint64_t g_tables_off, g_tables_size, g_size;
 static File **g_files;             // by data offset
 static int g_nfiles;
 
+#define MAX_ROMFS_MODS 64
+static RomFSModInfo g_romfs_mods[MAX_ROMFS_MODS];
+static int g_nromfs_mods = 0;
+
+int romfs_mod_count(void) { return g_nromfs_mods; }
+const RomFSModInfo *romfs_mod_info(int idx) {
+    if (idx < 0 || idx >= g_nromfs_mods) return NULL;
+    return &g_romfs_mods[idx];
+}
+int romfs_total_files(void) { return g_nfiles; }
+
 static char *rel_path(File *f) {
     char *parts[40];
     int n = 0;
@@ -217,6 +228,35 @@ bool romfs_open(const char *base_dir, const char *const *overlays, int noverlays
         }
         LOG("[romfs] mod %s: %d files merged into RomFS (target: %s)\n",
             overlays[i], n, has_native_nx ? "root" : (is_native_nx || native_nx) ? "nativeNX" : "root");
+
+        if (g_nromfs_mods < MAX_ROMFS_MODS) {
+            RomFSModInfo *mi = &g_romfs_mods[g_nromfs_mods++];
+            mi->files_merged = n;
+            snprintf(mi->path, sizeof mi->path, "%s", overlays[i]);
+
+            const char *p = overlays[i];
+            const char *m = strstr(p, "/mods/");
+            if (!m) m = strstr(p, "/Mods/");
+            if (!m) m = strstr(p, "mods/");
+            if (!m) m = strstr(p, "Mods/");
+            if (m) {
+                const char *start = m + (*m == '/' ? 6 : 5);
+                char folder[128];
+                size_t flen = strcspn(start, "/\\");
+                if (flen >= sizeof folder) flen = sizeof folder - 1;
+                strncpy(folder, start, flen);
+                folder[flen] = '\0';
+                if (!strcasecmp(folder, "Main")) {
+                    snprintf(mi->name, sizeof mi->name, "MHGU HD Project (Main)");
+                } else if (!strcasecmp(folder, "Monsters")) {
+                    snprintf(mi->name, sizeof mi->name, "MHGU HD Project (Monsters)");
+                } else {
+                    snprintf(mi->name, sizeof mi->name, "%s", folder);
+                }
+            } else {
+                snprintf(mi->name, sizeof mi->name, "%s", overlays[i]);
+            }
+        }
     }
     sort_tree(root);
     Lists l = {0};

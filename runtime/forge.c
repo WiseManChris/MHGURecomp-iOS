@@ -35,6 +35,7 @@
 #include "kernel.h"
 #include "mods.h"
 #include "overlay.h"
+#include "romfs.h"
 
 #define FORGE_MAJOR 1
 #define FORGE_MINOR 5
@@ -1304,6 +1305,15 @@ static void app_run(Cpu *c) {
             i + 1, plugins[i].name, plugins[i].active ? "YES" : "NO",
             plugins[i].on_update ? "YES" : "NO",
             plugins[i].on_imgui[FORGE_IMGUI_RENDER] ? "YES" : "NO");
+    }
+    int nromfs = romfs_mod_count();
+    if (nromfs > 0) {
+        LOG("[forge] ACTIVE ROMFS MODS: %d mod(s) mounted\n", nromfs);
+        for (int i = 0; i < nromfs; i++) {
+            const RomFSModInfo *mi = romfs_mod_info(i);
+            if (mi) LOG("[forge]   [%d] %-30s | Merged: %5d files | Status: ACTIVE\n",
+                        i + 1, mi->name, mi->files_merged);
+        }
     }
     LOG("================================================================\n");
     memcpy(c->r, args, sizeof args);
