@@ -10,6 +10,7 @@
 
 #include "rt.h"
 #include "zip_util.h"
+#include "sz_util.h"
 
 static bool is_dir(const char *p) {
     struct stat st;
@@ -253,10 +254,14 @@ static void list_mods(void) {
         dump_dir_diag("data", 1);
     }
 
-    // 2. Automatically unpack any .zip archives placed in mods/, Documents, or data/
+    // 2. Automatically unpack any .zip and .7z archives placed in mods/, Documents, or data/
     zip_extract_all_in_dir(mdir, mdir);
     zip_extract_all_in_dir(".", mdir);
     if (is_dir("data")) zip_extract_all_in_dir("data", mdir);
+
+    sz_extract_all_in_dir(mdir, mdir);
+    sz_extract_all_in_dir(".", mdir);
+    if (is_dir("data")) sz_extract_all_in_dir("data", mdir);
 
     // 3. Load order override file
     char path[1100];

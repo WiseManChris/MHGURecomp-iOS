@@ -128,7 +128,7 @@ IMGUI_OBJ := $(patsubst $(IMGUI)/%.cpp,$(O)/imgui/%.o,$(IMGUI_SRC))
 IMGUIFLAGS := -O2 -g -std=c++17 -DCIMGUI_NO_EXPORT -I$(IMGUI) -I$(IMGUI)/imgui $(if $(DEPS),-I$(DEPS)/include)
 # (vendored VulkanMemoryAllocator fallback: -I on a missing dir is ignored, so MSYS2 builds
 # with the system vulkan-memory-allocator package are unaffected)
-RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) $(if $(DEPS),-I$(DEPS)/include) $(OSFLAGS)
+RTFLAGS  := -O2 -g -fno-strict-aliasing -Wall -Wno-unused-function -Iruntime -Ithird_party/vk_mem_alloc -I$(IMGUI) -Ithird_party/lzma $(if $(DEPS),-I$(DEPS)/include) $(OSFLAGS)
 # NULL_GPU=1: no renderer (runtime/nvn/backend_null.c: the game runs, nothing is drawn)
 ifeq ($(NULL_GPU),1)
 RTFLAGS  += -DMHGU_NULL_BACKEND
