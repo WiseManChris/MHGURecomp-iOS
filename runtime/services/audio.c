@@ -7,6 +7,7 @@
 
 #include <SDL3/SDL.h>
 
+#include "../config.h"
 #include "../hle.h"
 #include "../ipc.h"
 
