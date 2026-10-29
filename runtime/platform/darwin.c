@@ -297,6 +297,7 @@ void plat_setup_ios_documents(void) {
              @"  mods/Key_Quest_Markers/\n"
              @"  mods/MHGU-HD-Project/\n\n"
              @"Everything is auto-detected:\n"
+             @"• Zip Archives (.zip) - automatically unpacked & installed on startup!\n"
              @"• Forge Plugins (.nro) - floating damage numbers, quest markers, HUD mods\n"
              @"• RomFS Mods - HD textures, models, UI packs, sound mods\n"
              @"• ExeFS Patches (.ips / .pchtxt) - 60fps patches, aspect ratio, FOV\n\n"

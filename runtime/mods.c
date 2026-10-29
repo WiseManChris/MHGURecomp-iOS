@@ -9,13 +9,12 @@
 #include <sys/stat.h>
 
 #include "rt.h"
+#include "zip_util.h"
 
 static bool is_dir(const char *p) {
     struct stat st;
     return !stat(p, &st) && S_ISDIR(st.st_mode);
 }
-
-static bool find_dir(const char *dir, const char *want, int depth, char *out, size_t n);
 
 const char *mods_dir(void) {
     static char s_dir[1024];
@@ -61,6 +60,77 @@ static void add_mod_name(const char *name) {
     }
 }
 
+// Find a folder named `want` (case-insensitive) either as `dir` itself or up to `depth` levels below it.
+static bool find_dir(const char *dir, const char *want, int depth, char *out, size_t n) {
+    if (!dir || !want || depth < 0) return false;
+    // Check if dir itself matches want
+    const char *slash = strrchr(dir, '/');
+    const char *last = slash ? slash + 1 : dir;
+    if (!strcasecmp(last, want)) {
+        snprintf(out, n, "%s", dir);
+        return true;
+    }
+    DIR *d = opendir(dir);
+    if (!d) return false;
+    struct dirent *e;
+    // 1. Check direct children first
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        if (!strcasecmp(e->d_name, want)) {
+            char p[1100];
+            snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+            if (is_dir(p)) {
+                closedir(d);
+                snprintf(out, n, "%s", p);
+                return true;
+            }
+        }
+    }
+    if (depth == 0) {
+        closedir(d);
+        return false;
+    }
+    rewinddir(d);
+    // 2. Recurse into subdirectories
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.' || !strcasecmp(e->d_name, "__MACOSX")) continue;
+        char p[1100];
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (is_dir(p)) {
+            if (find_dir(p, want, depth - 1, out, n)) {
+                closedir(d);
+                return true;
+            }
+        }
+    }
+    closedir(d);
+    return false;
+}
+
+static void dump_dir_diag(const char *dir, int depth) {
+    if (depth > 2) return;
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char p[1100];
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(p, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                LOG("[mods-diag] %*s[DIR]  %s\n", depth * 2, "", e->d_name);
+                if (depth < 2 && strcasecmp(e->d_name, "cache") && strcasecmp(e->d_name, "logs")) {
+                    dump_dir_diag(p, depth + 1);
+                }
+            } else {
+                LOG("[mods-diag] %*s[FILE] %s (%lld bytes)\n", depth * 2, "", e->d_name, (long long)st.st_size);
+            }
+        }
+    }
+    closedir(d);
+}
+
 static bool has_child_ci(const char *parent, const char *want) {
     DIR *d = opendir(parent);
     if (!d) return false;
@@ -76,19 +146,6 @@ static bool has_child_ci(const char *parent, const char *want) {
     }
     closedir(d);
     return found;
-}
-
-static void scan_dir_for_mods(const char *dir) {
-    DIR *d = opendir(dir);
-    if (!d) return;
-    struct dirent *e;
-    while (g_nmods < MAX_MODS && (e = readdir(d))) {
-        if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
-        char p[1100];
-        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
-        if (is_dir(p)) add_mod_name(e->d_name);
-    }
-    closedir(d);
 }
 
 static bool has_loose_files(const char *parent) {
@@ -119,11 +176,89 @@ static bool is_reserved_app_dir(const char *name) {
     return false;
 }
 
+static bool is_romfs_subfolder(const char *name) {
+    static const char *const names[] = {
+        "romfs", "nativeNX", "arc", "sound", "loc", "movie",
+        "system", "sa", "eng", "fre", "ger", "ita", "spa",
+        "chS", "chT", "table", "plugins"
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (!strcasecmp(name, names[i])) return true;
+    }
+    return false;
+}
+
+static bool has_direct_romfs_content(const char *dir) {
+    static const char *const direct_names[] = {
+        "romfs", "nativeNX", "arc", "sound", "loc", "movie",
+        "system", "sa", "eng", "fre", "ger", "ita", "spa",
+        "chS", "chT", "table", "plugins"
+    };
+    for (size_t i = 0; i < sizeof(direct_names) / sizeof(direct_names[0]); i++) {
+        if (has_child_ci(dir, direct_names[i])) return true;
+    }
+    return has_loose_files(dir);
+}
+
+static void check_and_add_mod(const char *base_dir, const char *entry_name) {
+    char p[1100];
+    snprintf(p, sizeof p, "%s/%s", base_dir, entry_name);
+    if (!is_dir(p)) return;
+
+    char dummy[1100];
+    if (find_dir(p, "romfs", 8, dummy, sizeof dummy) ||
+        find_dir(p, "nativeNX", 8, dummy, sizeof dummy) ||
+        find_dir(p, "plugins", 8, dummy, sizeof dummy) ||
+        find_dir(p, "arc", 8, dummy, sizeof dummy) ||
+        find_dir(p, "exefs", 8, dummy, sizeof dummy) ||
+        find_dir(p, "0100770008dd8000", 8, dummy, sizeof dummy) ||
+        find_dir(p, "0100770008DD8000", 8, dummy, sizeof dummy) ||
+        has_loose_files(p)) {
+        if (!strcmp(base_dir, ".")) {
+            add_mod_name(entry_name);
+        } else {
+            char rel[1100];
+            snprintf(rel, sizeof rel, "%s/%s", base_dir, entry_name);
+            add_mod_name(rel);
+        }
+    }
+}
+
+static void scan_dir_for_mods(const char *dir) {
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *e;
+    while (g_nmods < MAX_MODS && (e = readdir(d))) {
+        if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+        char p[1100];
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (is_dir(p)) add_mod_name(e->d_name);
+    }
+    closedir(d);
+}
+
 static void list_mods(void) {
     if (g_nmods >= 0) return;
     g_nmods = 0;
     const char *mdir = mods_dir();
 
+    // 1. Diagnostic filesystem dump to log.txt for complete visibility
+    LOG("[mods-diag] === Mods Filesystem Diagnostic ===\n");
+    LOG("[mods-diag] Active mods dir: '%s'\n", mdir);
+    dump_dir_diag(mdir, 1);
+    LOG("[mods-diag] Documents root ('.'):\n");
+    dump_dir_diag(".", 1);
+    if (is_dir("data")) {
+        LOG("[mods-diag] Data folder ('data'):\n");
+        dump_dir_diag("data", 1);
+    }
+
+    // 2. Automatically unpack any .zip archives placed in mods/, Documents, or data/
+    zip_extract_all_in_dir(mdir, mdir);
+    zip_extract_all_in_dir(".", mdir);
+    if (is_dir("data")) zip_extract_all_in_dir("data", mdir);
+
+    // 3. Load order override file
     char path[1100];
     snprintf(path, sizeof path, "%s/load_order.txt", mdir);
     FILE *f = fopen(path, "r");
@@ -141,18 +276,23 @@ static void list_mods(void) {
         return;
     }
 
-    bool mdir_has_direct_romfs = has_child_ci(mdir, "romfs") || has_child_ci(mdir, "nativeNX");
-    if (mdir_has_direct_romfs || has_loose_files(mdir)) {
+    // 4. Check if mdir itself directly contains RomFS data (loose arc, sound, loc, nativeNX, romfs)
+    bool mdir_has_direct_romfs = has_direct_romfs_content(mdir);
+    if (mdir_has_direct_romfs) {
         add_mod_name(".");
     }
 
-    // Scan the active mods directory
+    // 5. Scan the active mods directory
     DIR *d = opendir(mdir);
     if (d) {
         struct dirent *e;
         while (g_nmods < MAX_MODS && (e = readdir(d))) {
-            if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
-            if (mdir_has_direct_romfs && (!strcasecmp(e->d_name, "romfs") || !strcasecmp(e->d_name, "nativeNX"))) continue;
+            if (e->d_name[0] == '.') continue;
+            if (e->d_name[0] == '_') {
+                LOG("[mods] Note: folder '%s' is disabled (starts with '_'). Remove '_' to enable.\n", e->d_name);
+                continue;
+            }
+            if (mdir_has_direct_romfs && is_romfs_subfolder(e->d_name)) continue;
             char p[1100];
             snprintf(p, sizeof p, "%s/%s", mdir, e->d_name);
             if (is_dir(p)) add_mod_name(e->d_name);
@@ -160,99 +300,78 @@ static void list_mods(void) {
         closedir(d);
     }
 
-    // If data/mods exists and is distinct from mdir, scan it too
+    // 6. If data/mods exists and is distinct from mdir, scan it too
     if (strcasecmp(mdir, "data/mods") && is_dir("data/mods")) {
         scan_dir_for_mods("data/mods");
     }
 
-    // Support Atmosphere Switch CFW layout: atmosphere/contents/<title_id>
-    if (is_dir("atmosphere/contents")) {
-        DIR *ad = opendir("atmosphere/contents");
-        if (ad) {
-            struct dirent *e;
-            while ((e = readdir(ad))) {
-                if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
-                char p[1100];
-                snprintf(p, sizeof p, "atmosphere/contents/%s", e->d_name);
-                if (is_dir(p)) add_mod_name(p);
+    // 7. Support Atmosphere Switch CFW layout: atmosphere/contents/<title_id>
+    const char *atmos_paths[] = { "atmosphere/contents", "mods/atmosphere/contents", "data/atmosphere/contents" };
+    for (size_t i = 0; i < sizeof(atmos_paths) / sizeof(atmos_paths[0]); i++) {
+        if (is_dir(atmos_paths[i])) {
+            DIR *ad = opendir(atmos_paths[i]);
+            if (ad) {
+                struct dirent *e;
+                while (g_nmods < MAX_MODS && (e = readdir(ad))) {
+                    if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+                    char p[1100];
+                    snprintf(p, sizeof p, "%s/%s", atmos_paths[i], e->d_name);
+                    if (is_dir(p)) add_mod_name(p);
+                }
+                closedir(ad);
             }
-            closedir(ad);
         }
     }
 
-    // Support contents/<title_id> directly
-    if (is_dir("contents")) {
-        DIR *cd = opendir("contents");
-        if (cd) {
-            struct dirent *e;
-            while ((e = readdir(cd))) {
-                if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
-                char p[1100];
-                snprintf(p, sizeof p, "contents/%s", e->d_name);
-                if (is_dir(p)) add_mod_name(p);
+    // 8. Support contents/<title_id> directly
+    const char *contents_paths[] = { "contents", "mods/contents", "data/contents" };
+    for (size_t i = 0; i < sizeof(contents_paths) / sizeof(contents_paths[0]); i++) {
+        if (is_dir(contents_paths[i])) {
+            DIR *cd = opendir(contents_paths[i]);
+            if (cd) {
+                struct dirent *e;
+                while (g_nmods < MAX_MODS && (e = readdir(cd))) {
+                    if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+                    char p[1100];
+                    snprintf(p, sizeof p, "%s/%s", contents_paths[i], e->d_name);
+                    if (is_dir(p)) add_mod_name(p);
+                }
+                closedir(cd);
             }
-            closedir(cd);
         }
     }
 
-    // Scan current directory (Documents) for any user mod folders placed at top-level
+    // 9. Scan current directory (Documents) for any user mod folders placed at top-level
     DIR *cur = opendir(".");
     if (cur) {
         struct dirent *e;
         while (g_nmods < MAX_MODS && (e = readdir(cur))) {
             if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
             if (is_reserved_app_dir(e->d_name)) continue;
-            struct stat st;
-            if (!stat(e->d_name, &st) && S_ISDIR(st.st_mode)) {
-                // If it contains romfs, nativeNX, arc, exefs, or plugins, it's a mod
-                char dummy[512];
-                if (find_dir(e->d_name, "romfs", 3, dummy, sizeof dummy) ||
-                    find_dir(e->d_name, "nativeNX", 3, dummy, sizeof dummy) ||
-                    find_dir(e->d_name, "exefs", 3, dummy, sizeof dummy) ||
-                    find_dir(e->d_name, "arc", 3, dummy, sizeof dummy) ||
-                    has_loose_files(e->d_name)) {
-                    add_mod_name(e->d_name);
-                }
-            }
+            check_and_add_mod(".", e->d_name);
         }
         closedir(cur);
     }
 
-    qsort(g_names, g_nmods, sizeof *g_names, cmp);
-    LOG("[mods] discovered %d mod(s) across '%s'\n", g_nmods, mdir);
-}
-
-// The folder named `want` (any case) in dir or up to `depth` levels below it (shallowest first), into out.
-static bool find_dir(const char *dir, const char *want, int depth, char *out, size_t n) {
-    for (int level = 0; level <= depth; level++) {
-        // breadth first: walk the tree to `level` and look there
-        struct { char path[1024]; int lv; } stack[64];
-        int sp = 0;
-        snprintf(stack[sp].path, sizeof stack[sp].path, "%s", dir), stack[sp++].lv = 0;
-        while (sp) {
-            sp--;
-            char cur[1024];
-            int lv = stack[sp].lv;
-            snprintf(cur, sizeof cur, "%s", stack[sp].path);
-            DIR *d = opendir(cur);
-            if (!d) continue;
+    // 10. Scan data/ for any user mod folders placed inside data/
+    if (is_dir("data")) {
+        DIR *dd = opendir("data");
+        if (dd) {
             struct dirent *e;
-            while ((e = readdir(d))) {
-                if (e->d_name[0] == '.') continue;
-                char p[1100];
-                snprintf(p, sizeof p, "%s/%s", cur, e->d_name);
-                if (!is_dir(p)) continue;
-                if (lv == level && !strcasecmp(e->d_name, want)) {
-                    closedir(d);
-                    snprintf(out, n, "%s", p);
-                    return true;
-                }
-                if (lv < level && sp < 64) snprintf(stack[sp].path, sizeof stack[sp].path, "%s", p), stack[sp++].lv = lv + 1;
+            while (g_nmods < MAX_MODS && (e = readdir(dd))) {
+                if (e->d_name[0] == '.' || e->d_name[0] == '_') continue;
+                if (!strcasecmp(e->d_name, "romfs") || !strcasecmp(e->d_name, "exefs") || !strcasecmp(e->d_name, "mods")) continue;
+                check_and_add_mod("data", e->d_name);
             }
-            closedir(d);
+            closedir(dd);
         }
     }
-    return false;
+
+    qsort(g_names, g_nmods, sizeof *g_names, cmp);
+    LOG("[mods] discovered %d mod(s) across '%s'\n", g_nmods, mdir);
+    for (int i = 0; i < g_nmods; i++) {
+        LOG("[mods]   mod[%d]: %s\n", i + 1, g_names[i]);
+    }
 }
 
 int mods_romfs_layers(const char **out, int max) {
@@ -263,17 +382,20 @@ int mods_romfs_layers(const char **out, int max) {
         char mod[1100], path[1100];
         if (!strcmp(g_names[i], ".")) {
             snprintf(mod, sizeof mod, "%s", mdir);
-        } else if (g_names[i][0] == '/' || !strncmp(g_names[i], "atmosphere/", 11) || !strncmp(g_names[i], "contents/", 9) || !strncmp(g_names[i], "data/", 5)) {
+        } else if (g_names[i][0] == '/' || !strncmp(g_names[i], "atmosphere/", 11) || !strncmp(g_names[i], "contents/", 9) || !strncmp(g_names[i], "data/", 5) || strchr(g_names[i], '/')) {
             snprintf(mod, sizeof mod, "%s", g_names[i]);
         } else {
             snprintf(mod, sizeof mod, "%s/%s", mdir, g_names[i]);
             if (!is_dir(mod)) {
                 snprintf(mod, sizeof mod, "data/mods/%s", g_names[i]);
                 if (!is_dir(mod)) {
-                    snprintf(mod, sizeof mod, "%s", g_names[i]);
+                    snprintf(mod, sizeof mod, "data/%s", g_names[i]);
                     if (!is_dir(mod)) {
-                        LOG("[mods] %s: no such directory\n", g_names[i]);
-                        continue;
+                        snprintf(mod, sizeof mod, "%s", g_names[i]);
+                        if (!is_dir(mod)) {
+                            LOG("[mods] %s: no such directory\n", g_names[i]);
+                            continue;
+                        }
                     }
                 }
             }
@@ -440,15 +562,18 @@ void mods_patch_module(Module *m, const uint8_t build_id[32]) {
         char mod[1100], ex[1100];
         if (!strcmp(g_names[i], ".")) {
             snprintf(mod, sizeof mod, "%s", mdir);
-        } else if (g_names[i][0] == '/' || !strncmp(g_names[i], "atmosphere/", 11) || !strncmp(g_names[i], "data/", 5)) {
+        } else if (g_names[i][0] == '/' || !strncmp(g_names[i], "atmosphere/", 11) || !strncmp(g_names[i], "contents/", 9) || !strncmp(g_names[i], "data/", 5) || strchr(g_names[i], '/')) {
             snprintf(mod, sizeof mod, "%s", g_names[i]);
         } else {
             snprintf(mod, sizeof mod, "%s/%s", mdir, g_names[i]);
             if (!is_dir(mod)) {
                 snprintf(mod, sizeof mod, "data/mods/%s", g_names[i]);
                 if (!is_dir(mod)) {
-                    snprintf(mod, sizeof mod, "%s", g_names[i]);
-                    if (!is_dir(mod)) continue;
+                    snprintf(mod, sizeof mod, "data/%s", g_names[i]);
+                    if (!is_dir(mod)) {
+                        snprintf(mod, sizeof mod, "%s", g_names[i]);
+                        if (!is_dir(mod)) continue;
+                    }
                 }
             }
         }

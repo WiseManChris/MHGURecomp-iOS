@@ -198,7 +198,17 @@ static inline uint32_t shc_ror(Cpu *c, uint32_t v, uint32_t s) {
 
 // ---- misc integer
 static inline uint32_t clz32(uint32_t v) { return v ? __builtin_clz(v) : 32; }
+#if defined(__has_builtin) && __has_builtin(__builtin_bitreverse32)
 static inline uint32_t rbit32(uint32_t v) { return __builtin_bitreverse32(v); }
+#else
+static inline uint32_t rbit32(uint32_t v) {
+    v = ((v >> 1) & 0x55555555u) | ((v & 0x55555555u) << 1);
+    v = ((v >> 2) & 0x33333333u) | ((v & 0x33333333u) << 2);
+    v = ((v >> 4) & 0x0F0F0F0Fu) | ((v & 0x0F0F0F0Fu) << 4);
+    v = ((v >> 8) & 0x00FF00FFu) | ((v & 0x00FF00FFu) << 8);
+    return (v >> 16) | (v << 16);
+}
+#endif
 static inline uint32_t rev16_32(uint32_t v) { return ((v & 0x00ff00ffu) << 8) | ((v >> 8) & 0x00ff00ffu); }
 static inline uint32_t revsh32(uint32_t v) { return (uint32_t)(int32_t)(int16_t)(((v & 0xFF) << 8) | ((v >> 8) & 0xFF)); }
 static inline uint32_t udiv32(uint32_t a, uint32_t b) { return b ? a / b : 0; }
