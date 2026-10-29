@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 
 #include "rt.h"
+#include "interp.h"
 
 static bool is_dir(const char *p) {
     struct stat st;
