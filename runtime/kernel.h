@@ -35,7 +35,6 @@ struct KThread {
     jmp_buf unwind;        // svcExitThread: back to thread_main
     bool started, finished;
     KThread *anext;        // every thread (g_klock)
-    uint32_t tls_slots[64]; // nn::os TLS slot storage for plugins/threads
 };
 
 typedef struct KSharedMem {
