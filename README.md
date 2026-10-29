@@ -181,16 +181,37 @@ Automated build artifacts (`.ipa`) are also compiled via GitHub Actions on every
 
 ## Credits & Acknowledgments
 
-This project would not be possible without the incredible work of the following developers and open-source projects:
+This project is built on the shoulders of giants. We express our deepest gratitude to all the talented developers, reverse engineers, and open-source projects that made this port possible:
 
-- **[morerokk](https://github.com/morerokk/MHGURecomp)**: Creator of the original MHGU Recomp project, static recompilation tools, ARM lifter, and runtime architecture.
-- **[WiseManChris](https://github.com/WiseManChris)**: iOS and iPadOS port development, MoltenVK pipeline integration, memory model tuning, in-app `.7z` and `.zip` mod archive extractors, and software keyboard handling.
-- **[Fexty](https://github.com/Fexty12573)** & **jeffi2287**: Creators of the **Forge** mod loader and API, enabling guest code plugins and hooks.
-- **[Monkbreh](https://github.com/Monkbreh/MHGU-HD-Project)**: Creator of the **MHGU HD Project**, providing the comprehensive ESRGAN remastered textures and assets.
+### Core Project & Recompiler
+- **[morerokk](https://github.com/morerokk/MHGURecomp)**: Creator of the original PC MHGU Recomp project, static recompilation tools, A32/VFP/NEON lifters, generator, and runtime framework.
+- **[WiseManChris](https://github.com/WiseManChris)**: iOS and iPadOS port development, MoltenVK Metal pipeline integration, 4GB dynamic guest memory space reservation, in-app `.7z` and `.zip` mod archive extractors, touchscreen and software keyboard handling, and ongoing maintenance.
+- **Upstream Recomp Contributors**: **Huss31 / Huss3A**, **Mathieu**, **Vuze**, **kzd**, **DMitsuki**, **Jose Ignacio Acin Pozo**, **Kat**, and **jhuz0**.
+
+### Foundation & Architecture Roots
+- **[Peiikai](https://github.com/Peiikai)** & **LAS Recomp**: The foundational runtime kernel, IPC services, loader, guest dispatch, NVN graphics objects, and Maxwell shader translator adapted for 32-bit ARM.
+- **The [nxnative](https://github.com/nxnative)** project: Architecture, Switch system headers, front_ios, and software keyboard reference (`swkbd.c`).
+- **[The Ryujinx Team](https://ryujinx.org/)**: Reverse-engineering research and code references for the Switch audio renderer (`VoiceState`, `DataSourceHelper`, reverb, aux buffers, I3DL2 reverb) and Maxwell instruction decoders (`InstDecoders`, `InstXmad`, `InstHadd2`).
+- **[The yuzu & Skyline Teams](https://github.com/skyline-emu)**: Switch IPC service documentation, REV4 audio splitters, and the base architecture for the Forge plugin system.
+- **[The libnx & Switchbrew Teams](https://github.com/switchbrew/libnx)**: Definitions, system calls, IPC protocol layouts, and Nintendo Switch homebrew toolchains.
+- **[SciresM & The Atmosphère Team](https://github.com/Atmosphere-NX/Atmosphere)**: Cheat code parsing engine and RomFS virtual layering architecture.
+
+### Modding Ecosystem & Community
+- **[Fexty](https://github.com/Fexty12573)** & **jeffi2287**: Creators of the **Forge** mod loader, guest code hook engine, and in-game Dear ImGui overlay.
+- **[Monkbreh](https://github.com/Monkbreh/MHGU-HD-Project)**: Creator of the **MHGU HD Project**, providing the comprehensive ESRGAN remastered textures and UI assets.
 - **PurplefinNeptuna**: Creator of the indispensable **Key Quest Markers** mod.
-- **Igor Pavlov & The 7-Zip Team**: Authors of the ANSI-C LZMA SDK decoder utilized for embedded `.7z` archive extraction.
-- **The Khronos Group & The MoltenVK Contributors**: For the Vulkan-to-Metal translation layer powering graphics on iOS.
-- **libsdl-org**: For **SDL3**, providing robust iOS windowing, Metal view integration, and gamepad input.
+- **Luckyguess**: Creator of the MHGU Arc tools and editor.
+
+### Libraries & Technology
+- **[The Khronos Group & The MoltenVK Team](https://github.com/KhronosGroup/MoltenVK)**: For the Vulkan 1.2 on Metal 3 translation layer enabling graphics acceleration on iOS.
+- **[libsdl-org (Sam Lantinga and contributors)](https://github.com/libsdl-org/SDL)**: For **SDL3**, providing iOS windowing, Metal view integration, and Bluetooth gamepad input.
+- **[Igor Pavlov & The 7-Zip Team](https://www.7-zip.org/sdk.html)**: For the official ANSI-C LZMA SDK decoder powering the in-app 7z archive extractor.
+- **Rich Geldreich, Martin Raiber, Tenacious Software LLC, RAD Game Tools, Valve Software**: For **miniz**, the lightweight lossless compression library.
+- **[Omar Cornut](https://github.com/ocornut/imgui) & Dear ImGui Contributors**: For the Dear ImGui in-game overlay.
+- **[Stephan Dilly](https://github.com/cimgui/cimgui)**: For **cimgui**, providing C-bindings for Dear ImGui.
+- **[Advanced Micro Devices, Inc. (AMD) & Adam Sawicki](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator)**: For **VulkanMemoryAllocator (VMA)**.
+- **[The FFmpeg Project](https://ffmpeg.org/)**: For the lightweight MP4/H.264 video decoding routines.
+- **[Unicorn Engine Team](https://www.unicorn-engine.org/)**: For CPU emulation used in differential instruction validation.
 - **Capcom & Nintendo**: For creating *Monster Hunter Generations Ultimate* (*Monster Hunter XX*).
 
 ---
