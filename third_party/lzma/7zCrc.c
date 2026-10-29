@@ -79,7 +79,7 @@ static UInt32 Z7_FASTCALL Z7_CRC_UPDATE_T1_FUNC_NAME(UInt32 v, const void *data,
 
 #ifdef MY_CPU_LE
 
-#if defined(MY_CPU_ARM_OR_ARM64)
+#if defined(MY_CPU_ARM_OR_ARM64) && !defined(__APPLE__)
 // #pragma message("ARM*")
 
   #if (defined(__clang__) && (__clang_major__ >= 3)) \
