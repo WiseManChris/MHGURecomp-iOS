@@ -919,7 +919,6 @@ FORWARD("forge_nnosUnlockMutex", "_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE", f_mu
 HLE_FUNC("forge_nnosInitializeMutex", f_mutex_init) {  // (mutex, recursive): lock level 0
     c->r[2] = 0;
     uint32_t a = gsym("_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi");
-    if (!a) a = gsym("nnosInitializeMutex");
     if (!a) { RET(0); return; }
     c->pc = a;
     rt_dispatch(c);
@@ -932,7 +931,6 @@ FORWARD("nnosFinalizeMutex", "_ZN2nn2os13FinalizeMutexEPNS0_9MutexTypeE", f_nnos
 HLE_FUNC("nnosInitializeMutex", f_nnos_mutex_init) {  // (mutex, recursive, lock_level)
     c->r[2] = 0;
     uint32_t a = gsym("_ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi");
-    if (!a) a = gsym("nnosInitializeMutex");
     if (!a) { RET(0); return; }
     c->pc = a;
     rt_dispatch(c);
@@ -971,7 +969,7 @@ HLE_FUNC("nnosAllocateTlsSlot", f_nnos_alloc_tls) {
         RET(0x1A0A);  // failure ResultCode
         return;
     }
-    if (out_slot_ptr) ST32(out_slot_ptr, (uint32_t)slot);
+    if (out_slot_ptr && kernel_mapped(out_slot_ptr, 4)) ST32(out_slot_ptr, (uint32_t)slot);
     RET(0);  // nn::Result success
 }
 HLE_FUNC("_ZN2nn2os15AllocateTlsSlotEPNS0_7TlsSlotEPFvPvE", f_alloc_tls_cpp) { f_nnos_alloc_tls(c); }
@@ -1623,11 +1621,18 @@ static void forge_map_regions(void) {
     interp_add_range(FORGE_STUBS, FORGE_END);
 }
 
+static const char *filename_of(const char *p) {
+    const char *s = strrchr(p, '/');
+    const char *b = strrchr(p, '\\');
+    if (b > s) s = b;
+    return s ? s + 1 : p;
+}
+
 static void add_found_plugin(const char *path, const char *fname, char found[MAX_PLUGINS][1400], int *nf) {
     const char *ext = strrchr(fname, '.');
     if (!ext || strcasecmp(ext, ".nro")) return;
     int i = 0;
-    while (i < *nf && strcasecmp(strrchr(found[i], '/') + 1, fname)) i++;
+    while (i < *nf && strcasecmp(filename_of(found[i]), fname)) i++;
     if (i == MAX_PLUGINS) {
         LOG("[forge] %s: skipped, at most %d plugins can be loaded (%s)\n", fname, MAX_PLUGINS, path);
         return;
@@ -1706,7 +1711,7 @@ void forge_init(void) {
     for (int i = 0; i < nf; i++) {
         size_t len;
         uint8_t *data = read_all(found[i], &len);
-        const char *name = strrchr(found[i], '/') + 1;
+        const char *name = filename_of(found[i]);
         uint32_t bss = 0;
         if (data && len >= 0x3C) memcpy(&bss, data + 0x38, 4);
         // (the image, its bss and the 64 KiB alignment of the next one; the trampolines and stubs have their own regions)

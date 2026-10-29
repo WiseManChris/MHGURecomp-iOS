@@ -9,7 +9,6 @@
 #include <sys/stat.h>
 
 #include "rt.h"
-#include "interp.h"
 
 static bool is_dir(const char *p) {
     struct stat st;
@@ -259,58 +258,18 @@ typedef struct {
     uint32_t first_code[4];
 } Apply;
 
-#define MAX_CODE_PATCH_RANGES 1024
-static struct { uint32_t start, end; } s_code_patches[MAX_CODE_PATCH_RANGES];
-static int s_num_code_patches;
-
-static void record_code_patch(uint32_t start, uint32_t end) {
-    if (s_num_code_patches < MAX_CODE_PATCH_RANGES) {
-        s_code_patches[s_num_code_patches].start = start;
-        s_code_patches[s_num_code_patches].end = end;
-        s_num_code_patches++;
-    }
-}
-
 // One patch: `len` bytes at offset `off` of the module's memory image.
 static void apply(Apply *a, uint32_t off, const uint8_t *bytes, uint32_t len) {
     Module *m = a->m;
     if (!len) return;
     if ((uint64_t)off + len > m->size) { a->bad++; return; }
-    if (off < m->text_off + m->text_size && off + len > m->text_off) {  // code: apply to memory & route to interpreter
+    if (off < m->text_off + m->text_size && off + len > m->text_off) {  // code: compiled ahead, see mods.h
         if (a->code < 4) a->first_code[a->code] = m->base + off;
         a->code++;
-        memcpy(G2H(m->base + off), bytes, len);
-        record_code_patch(m->base + off, m->base + off + len);
         return;
     }
     memcpy(G2H(m->base + off), bytes, len);
     a->data++;
-}
-
-void mods_apply_code_patches(void) {
-    if (!s_num_code_patches) return;
-    int count = 0;
-    for (int i = 0; i < s_num_code_patches; i++) {
-        uint32_t start = s_code_patches[i].start;
-        uint32_t end = s_code_patches[i].end;
-        for (uint32_t a = start; a < end; a += 4) {
-            uint32_t next = 0;
-            uint32_t entry = dispatch_function_at(a, &next);
-            if (!entry) {
-                interp_add_range(a, a + 4);
-                continue;
-            }
-            const Module *m = &g_modules[a >= SDK_BASE];
-            uint32_t fn_end = next ? next : (m->base + m->text_off + m->text_size);
-            int r = dispatch_interpret(entry, fn_end);
-            if (r > 0) {
-                count++;
-                LOG("[mods] code patch at 0x%08x: function 0x%08x..0x%08x routed to interpreter\n",
-                    a, entry, fn_end);
-            }
-        }
-    }
-    LOG("[mods] %d code-patched function(s) successfully routed to interpreter\n", count);
 }
 
 static int hexval(int c) { return isdigit(c) ? c - '0' : isxdigit(c) ? (tolower(c) - 'a' + 10) : -1; }
@@ -455,9 +414,10 @@ void mods_patch_module(Module *m, const uint8_t build_id[32]) {
             if (!a.data && !a.code && !a.bad) continue;  // (for another module or version)
             LOG("[mods] %s: %s for %s: %d data patch(es) applied", a.mod, a.file, m->name, a.data);
             if (a.code) {
-                LOG(", %d code patch(es) applied via interpreter (at", a.code);
+                LOG(", %d code patch(es) NOT applied (at", a.code);
                 for (int k = 0; k < a.code && k < 4; k++) LOG(" %08x", a.first_code[k]);
-                LOG("%s)", a.code > 4 ? " ..." : "");
+                LOG("%s): the port runs the game's code compiled ahead of time, patched instructions change nothing",
+                    a.code > 4 ? " ..." : "");
             }
             if (a.bad) LOG(", %d outside the module (ignored)", a.bad);
             LOG("\n");
