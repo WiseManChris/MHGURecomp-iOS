@@ -496,3 +496,57 @@ void config_load(void) {
     LOG("[config] Village quests at the Hub counter: %s (their HP x%.2f first)\n", g_config.village_in_hub ? "on" : "off",
         hp->village);
 }
+
+void config_set_join(const char *join_addr) {
+    if (!join_addr) return;
+    snprintf(g_config.ldn_join, sizeof g_config.ldn_join, "%s", join_addr);
+    char path[1100];
+    ini_path(path, sizeof path);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0 || sz > 1024 * 1024) { fclose(f); return; }
+    char *content = (char *)malloc((size_t)sz + 1024);
+    if (!content) { fclose(f); return; }
+    size_t rd = fread(content, 1, (size_t)sz, f);
+    content[rd] = 0;
+    fclose(f);
+
+    char *line = content;
+    bool replaced = false;
+    while (*line) {
+        char *eol = strchr(line, '\n');
+        size_t len = eol ? (size_t)(eol - line) : strlen(line);
+        char temp[64];
+        if (len < sizeof temp) {
+            memcpy(temp, line, len);
+            temp[len] = 0;
+            char *p = temp;
+            while (*p == ' ' || *p == '\t') p++;
+            if (!strncasecmp(p, "join", 4) && (*(p + 4) == ' ' || *(p + 4) == '\t' || *(p + 4) == '=')) {
+                FILE *out = fopen(path, "w");
+                if (out) {
+                    fwrite(content, 1, (size_t)(line - content), out);
+                    fprintf(out, "Join = %s\n", join_addr);
+                    if (eol) fwrite(eol + 1, 1, strlen(eol + 1), out);
+                    fclose(out);
+                    replaced = true;
+                }
+                break;
+            }
+        }
+        if (!eol) break;
+        line = eol + 1;
+    }
+    if (!replaced) {
+        FILE *out = fopen(path, "a");
+        if (out) {
+            fprintf(out, "\n[Multiplayer]\nJoin = %s\n", join_addr);
+            fclose(out);
+        }
+    }
+    free(content);
+    LOG("[config] updated Join = %s in %s\n", join_addr, path);
+}

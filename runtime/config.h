@@ -52,6 +52,7 @@ extern float g_ui_anchor_aspect;   // the HUD's width / height, 16:9 .. g_render
 float camera_fovy(float fovy, float aspect);  // a 3D camera's vertical field of view for its aspect (gen.py PATCHES)
 
 void config_load(void);  // before the window and the guest start
+void config_set_join(const char *join_addr);
 int config_live_combo_window(void);
 void config_window_focus(int focused);
 int config_is_window_focused(void);

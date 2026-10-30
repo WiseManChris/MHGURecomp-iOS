@@ -12,6 +12,8 @@
 #else
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -702,6 +704,54 @@ static int scan_addresses(struct sockaddr_in *out, int max) {
     return n;
 }
 
+static void send_discovery_probes(hsock u, const uint8_t *probe, size_t probe_len) {
+    struct sockaddr_in to = {0};
+    to.sin_family = AF_INET;
+    to.sin_port = htons((uint16_t)g_config.ldn_port);
+    to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+    sendto(u, (const char *)probe, probe_len, 0, (struct sockaddr *)&to, sizeof to);
+    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    sendto(u, (const char *)probe, probe_len, 0, (struct sockaddr *)&to, sizeof to);
+
+#if !defined(_WIN32)
+    struct ifaddrs *ifaddr = NULL;
+    if (getifaddrs(&ifaddr) == 0) {
+        for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+            if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+            if (!(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK)) continue;
+            
+            // Subnet broadcast for Darwin / iOS
+            if (ifa->ifa_flags & IFF_BROADCAST) {
+                if (ifa->ifa_broadaddr && ifa->ifa_broadaddr->sa_family == AF_INET) {
+                    struct sockaddr_in bto = *(struct sockaddr_in *)ifa->ifa_broadaddr;
+                    bto.sin_port = htons((uint16_t)g_config.ldn_port);
+                    sendto(u, (const char *)probe, probe_len, 0, (struct sockaddr *)&bto, sizeof bto);
+                    LOG("[ldn] broadcast probe sent to %s:%d (%s)\n", inet_ntoa(bto.sin_addr), g_config.ldn_port, ifa->ifa_name);
+                }
+            }
+            
+            // /24 subnet unicast probe: bypasses Wi-Fi AP isolation and broadcast suppression
+            if (ifa->ifa_netmask && ifa->ifa_netmask->sa_family == AF_INET) {
+                uint32_t mask = ntohl(((struct sockaddr_in *)ifa->ifa_netmask)->sin_addr.s_addr);
+                uint32_t ip = ntohl(((struct sockaddr_in *)ifa->ifa_addr)->sin_addr.s_addr);
+                if (mask == 0xFFFFFF00u) {
+                    uint32_t base = ip & mask;
+                    for (uint32_t hst = 1; hst < 255; hst++) {
+                        if (hst == (ip & 0xFF)) continue;
+                        struct sockaddr_in uto = {0};
+                        uto.sin_family = AF_INET;
+                        uto.sin_port = htons((uint16_t)g_config.ldn_port);
+                        uto.sin_addr.s_addr = htonl(base | hst);
+                        sendto(u, (const char *)probe, probe_len, 0, (struct sockaddr *)&uto, sizeof uto);
+                    }
+                }
+            }
+        }
+        freeifaddrs(ifaddr);
+    }
+#endif
+}
+
 // Collects the networks of hosts that answer: by address (TCP) and by LAN broadcast (UDP).
 static int discover(uint8_t (*infos)[NETINFO_SIZE], struct sockaddr_in *addrs, int max) {
     hnet_init();
@@ -719,6 +769,7 @@ static int discover(uint8_t (*infos)[NETINFO_SIZE], struct sockaddr_in *addrs, i
         if (frame_send(s, F_HELLO, &h, sizeof h, NULL, 0) && (k = frame_recv(s, &type, buf)) >= NETINFO_SIZE && type == F_INFO) {
             memcpy(infos[n], buf, NETINFO_SIZE);
             addrs[n++] = targets[i];
+            LOG("[ldn] discovered lobby via Join address: %s\n", inet_ntoa(targets[i].sin_addr));
         }
         hclose(s);
     }
@@ -730,21 +781,29 @@ static int discover(uint8_t (*infos)[NETINFO_SIZE], struct sockaddr_in *addrs, i
     memcpy(probe, PROTO_MAGIC, 4);
     wr16(probe + 4, PROTO_VERSION);
     wr16(probe + 6, 0);
-    struct sockaddr_in to = {0};
-    to.sin_family = AF_INET;
-    to.sin_port = htons((uint16_t)g_config.ldn_port);
-    to.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-    sendto(u, (const char *)probe, sizeof probe, 0, (struct sockaddr *)&to, sizeof to);
-    to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    sendto(u, (const char *)probe, sizeof probe, 0, (struct sockaddr *)&to, sizeof to);
-    uint64_t end = plat_now_ns() + 400000000ull;
+
+    send_discovery_probes(u, probe, sizeof probe);
+    uint64_t start = plat_now_ns();
+    uint64_t end = start + 1200000000ull;
+    bool resent = false;
     for (uint64_t now; (now = plat_now_ns()) < end && n < max;) {
         fd_set r;
         FD_ZERO(&r);
         FD_SET(u, &r);
         uint64_t left = (end - now) / 1000;
         struct timeval tv = {(long)(left / 1000000), (long)(left % 1000000)};
-        if (select((int)u + 1, &r, NULL, NULL, &tv) <= 0) break;
+        if (tv.tv_sec > 0 || tv.tv_usec > 300000) {
+            tv.tv_sec = 0;
+            tv.tv_usec = 300000;
+        }
+        int sel = select((int)u + 1, &r, NULL, NULL, &tv);
+        if (sel <= 0) {
+            if (!resent && n == 0 && (plat_now_ns() - start) >= 300000000ull) {
+                resent = true;
+                send_discovery_probes(u, probe, sizeof probe);
+            }
+            continue;
+        }
         struct sockaddr_in from;
         socklen_t fl = sizeof from;
         int k = recvfrom(u, (char *)buf, MAX_FRAME, 0, (struct sockaddr *)&from, &fl);
@@ -755,6 +814,7 @@ static int discover(uint8_t (*infos)[NETINFO_SIZE], struct sockaddr_in *addrs, i
         memcpy(infos[n], buf + 8, NETINFO_SIZE);
         from.sin_port = htons(rd16(buf + 6));
         addrs[n++] = from;
+        LOG("[ldn] discovered lobby via LAN from %s:%d\n", inet_ntoa(from.sin_addr), ntohs(from.sin_port));
     }
     hclose(u);
     return n;
@@ -972,10 +1032,22 @@ HLE_FUNC("_ZN2nn3ldn12CloseStationEv", ldn_close_station) { NTRACE();
 
 static bool filter_ok(const uint8_t *info, const uint8_t *f) {
     uint32_t flags = rd32(f + 0x5C);
-    if ((flags & SF_LOCAL_COMM_ID) && memcmp(info + NI_LOCAL_COMM_ID, f, 8)) return false;
-    if ((flags & SF_SCENE_ID) && rd16(info + NI_SCENE_ID) != rd16(f + 0x0A)) return false;
-    if ((flags & SF_SESSION_ID) && memcmp(info + NI_SESSION_ID, f + 0x10, 0x10)) return false;
-    if ((flags & SF_BSSID) && memcmp(info + NI_BSSID, f + 0x24, 6)) return false;
+    if ((flags & SF_LOCAL_COMM_ID) && memcmp(info + NI_LOCAL_COMM_ID, f, 8)) {
+        LOG("[ldn] scan filter: local_comm_id mismatch\n");
+        return false;
+    }
+    if ((flags & SF_SCENE_ID) && rd16(info + NI_SCENE_ID) != rd16(f + 0x0A)) {
+        LOG("[ldn] scan filter: scene_id mismatch (%u vs %u)\n", rd16(info + NI_SCENE_ID), rd16(f + 0x0A));
+        return false;
+    }
+    if ((flags & SF_SESSION_ID) && memcmp(info + NI_SESSION_ID, f + 0x10, 0x10)) {
+        LOG("[ldn] scan filter: session_id mismatch\n");
+        return false;
+    }
+    if ((flags & SF_BSSID) && memcmp(info + NI_BSSID, f + 0x24, 6)) {
+        LOG("[ldn] scan filter: bssid mismatch\n");
+        return false;
+    }
     return true;
 }
 
@@ -997,8 +1069,7 @@ HLE_FUNC("_ZN2nn3ldn4ScanEPNS0_11NetworkInfoEPiiRKNS0_10ScanFilterEi", ldn_scan)
         if (k < max) memcpy((uint8_t *)G2H(out) + (size_t)k++ * NETINFO_SIZE, infos[i], NETINFO_SIZE);
     }
     if (pcount) ST32(pcount, k);
-    static int last = -1;
-    if (k != last) { LOG("[ldn] scan: %d network(s) found\n", k); last = k; }
+    LOG("[ldn] scan result: %d of %d discovered network(s) active\n", k, n);
     RET(0);
 }
 

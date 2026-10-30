@@ -15,6 +15,17 @@
 #include <cstdio>
 #include <mutex>
 #include <vector>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#if !defined(_WIN32)
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
+
+#include "config.h"
 
 #include "imgui.h"
 #ifndef MHGU_NULL_BACKEND
@@ -449,6 +460,79 @@ void overlay_frame(void *cpu) {
                 const char *names[16];
                 int n = forge_plugin_titles(names, 16);
                 for (int i = 0; i < n; i++) ImGui::BulletText("%s", names[i]);
+            }
+            if (ImGui::CollapsingHeader("Multiplayer / LAN Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
+                char local_ip[128] = "Unknown";
+#if !defined(_WIN32)
+                struct ifaddrs *ifaddr = NULL;
+                if (getifaddrs(&ifaddr) == 0) {
+                    for (struct ifaddrs *ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+                        if (!(ifa->ifa_flags & IFF_UP) || (ifa->ifa_flags & IFF_LOOPBACK)) continue;
+                        snprintf(local_ip, sizeof local_ip, "%s (%s)", inet_ntoa(((struct sockaddr_in *)ifa->ifa_addr)->sin_addr), ifa->ifa_name);
+                        break;
+                    }
+                    freeifaddrs(ifaddr);
+                }
+#endif
+                ImGui::BulletText("Device IP: %s", local_ip);
+                ImGui::BulletText("Lobby Port: %d", g_config.ldn_port);
+
+                static char join_buf[128] = "";
+                static bool join_init = false;
+                if (!join_init) {
+                    snprintf(join_buf, sizeof join_buf, "%s", g_config.ldn_join);
+                    join_init = true;
+                }
+
+                ImGui::SeparatorText("Direct Join Host IP (Steam Deck / PC)");
+                ImGui::SetNextItemWidth(-1);
+                ImGui::InputText("##JoinHost", join_buf, sizeof join_buf);
+
+                static char test_msg[128] = "";
+                static ImVec4 test_col = ImVec4(1, 1, 1, 1);
+
+                if (ImGui::Button("Test Host Connection")) {
+                    if (!join_buf[0]) {
+                        snprintf(test_msg, sizeof test_msg, "Please enter host IP first");
+                        test_col = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+                    } else {
+                        char host[64];
+                        int port = g_config.ldn_port;
+                        snprintf(host, sizeof host, "%s", join_buf);
+                        char *colon = strchr(host, ':');
+                        if (colon) { *colon = 0; port = atoi(colon + 1); }
+
+                        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+                        if (sock >= 0) {
+                            struct timeval tv = {1, 500000};
+                            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
+                            setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof tv);
+                            struct sockaddr_in sa = {0};
+                            sa.sin_family = AF_INET;
+                            sa.sin_port = htons((uint16_t)port);
+                            if (inet_pton(AF_INET, host, &sa.sin_addr) > 0 && connect(sock, (struct sockaddr *)&sa, sizeof sa) == 0) {
+                                snprintf(test_msg, sizeof test_msg, "Reachable! Host found at %s:%d", host, port);
+                                test_col = ImVec4(0.2f, 1.0f, 0.2f, 1.0f);
+                            } else {
+                                snprintf(test_msg, sizeof test_msg, "Failed to connect to %s:%d", host, port);
+                                test_col = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+                            }
+                            close(sock);
+                        }
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Save & Apply")) {
+                    config_set_join(join_buf);
+                    snprintf(test_msg, sizeof test_msg, "Saved Join = %s", join_buf);
+                    test_col = ImVec4(0.2f, 0.8f, 1.0f, 1.0f);
+                }
+
+                if (test_msg[0]) {
+                    ImGui::TextColored(test_col, "%s", test_msg);
+                }
+                ImGui::TextDisabled("If local broadcast does not find the host, save its IP above then use Search Hubs.");
             }
             if (ImGui::CollapsingHeader("Plugin UI")) forge_imgui_run(cpu, FORGE_IMGUI_RENDER);
         }
